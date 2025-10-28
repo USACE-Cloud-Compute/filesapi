@@ -1,4 +1,4 @@
-module github.com/usace/filesapi
+module github.com/usace-cloud-compute/filesapi
 
 go 1.22
 
