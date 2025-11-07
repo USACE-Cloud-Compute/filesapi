@@ -466,9 +466,10 @@ func TestWalk(t *testing.T) {
 		Credentials: S3FS_Attached{
 			Profile: testProfile,
 		},
-		S3Region: os.Getenv("AWS_REGION"),
-		S3Bucket: os.Getenv("AWS_BUCKET"),
-		MaxKeys:  2,
+		S3Region:    os.Getenv("AWS_REGION"),
+		S3Bucket:    os.Getenv("AWS_BUCKET"),
+		AltEndpoint: os.Getenv("AWS_ENDPOINT"),
+		MaxKeys:     2,
 	}
 
 	fs, err := NewFileStore(config)
