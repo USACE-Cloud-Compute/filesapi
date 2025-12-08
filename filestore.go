@@ -21,6 +21,7 @@ import (
 )
 
 type PATHTYPE int
+type EncryptionStrategy string
 
 const (
 	FILE PATHTYPE = iota
@@ -28,8 +29,11 @@ const (
 )
 
 const (
-	DEFAULTMAXKEYS   int32  = 1000
-	DEFAULTDELIMITER string = "/"
+	DEFAULTMAXKEYS    int32              = 1000
+	DEFAULTDELIMITER  string             = "/"
+	DefaultEncryption EncryptionStrategy = "DEFAULT"
+	AesEncryption     EncryptionStrategy = "AES"
+	VendorEncryption  EncryptionStrategy = "VENDOR"
 )
 
 var defaultChunkSize int64 = 10 * 1024 * 1024
@@ -129,10 +133,11 @@ type GetObjectInput struct {
 }
 
 type PutObjectInput struct {
-	Source   ObjectSource
-	Dest     PathConfig
-	Mutipart bool
-	PartSize int
+	Source     ObjectSource
+	Dest       PathConfig
+	Mutipart   bool
+	PartSize   int
+	Encryption EncryptionStrategy
 }
 
 type Range struct {

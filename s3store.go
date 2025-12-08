@@ -437,6 +437,12 @@ func (s3fs *S3FS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 			ContentLength: poi.Source.ContentLength,
 			Key:           &s3Path,
 		}
+
+		//currently only supporting default equivalent of cls --sse
+		//will add kms and possibly others as the need arises
+		if poi.Encryption == DefaultEncryption || poi.Encryption == AesEncryption {
+			input.ServerSideEncryption = types.ServerSideEncryptionAes256
+		}
 		s3output, err := s3fs.s3client.PutObject(context.TODO(), input)
 		if err != nil {
 			return nil, err
