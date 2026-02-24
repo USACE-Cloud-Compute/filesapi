@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -95,10 +96,14 @@ func (b *BlockFS) GetObject(goi GetObjectInput) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	buf := make([]byte, readRange.End-readRange.Start)
-	_, err = reader.ReadAt(buf, readRange.Start) //@TODO not sure if I should check the # of bytes read and compare to range
+	buf := make([]byte, readRange.End-readRange.Start+1)
+	_, err = reader.ReadAt(buf, readRange.Start)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
 	return io.NopCloser(bytes.NewReader(buf)), nil
 }
+
 func (b *BlockFS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 	foo := FileOperationOutput{}
 	var err error
@@ -212,14 +217,89 @@ func (b *BlockFS) CompleteObjectUpload(u CompletedObjectUploadConfig) error {
 	return nil
 }
 
-func (b *BlockFS) Walk(input WalkInput, vistorFunction FileVisitFunction) error {
-	err := filepath.Walk(input.Path.Path,
-		func(path string, fileinfo os.FileInfo, err error) error {
-			if err != nil {
+func (b *BlockFS) Walk(input WalkInput, visitorFunction FileVisitFunction) error {
+	if input.FsUseWalk {
+		err := filepath.Walk(input.Path.Path,
+			func(path string, fileinfo os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				err = visitorFunction(path, fileinfo)
 				return err
-			}
-			err = vistorFunction(path, fileinfo)
-			return err
-		})
-	return err
+			})
+		return err
+	} else {
+		err := filepath.WalkDir(input.Path.Path,
+			func(path string, direntry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				//pass a full FileInfo to the visitor fucntion
+				if input.FsFullInfo {
+					info, err := direntry.Info()
+					if err != nil {
+						return err
+					}
+					err = visitorFunction(path, info)
+				} else {
+					err = visitorFunction(path, &DirEntryFileInfo{DirEntry: direntry})
+				}
+				return err
+			})
+		return err
+	}
+}
+
+type DirEntryFileInfo struct {
+	DirEntry fs.DirEntry
+	info     fs.FileInfo
+	// size     int64
+	// modTime  time.Time
+	// fsSys    any
+	// fileMode fs.FileMode
+}
+
+func (defi DirEntryFileInfo) Name() string {
+	return defi.DirEntry.Name()
+}
+
+func (defi DirEntryFileInfo) Size() int64 {
+	if defi.info != nil {
+		return defi.info.Size()
+	}
+	return -1
+}
+
+func (defi DirEntryFileInfo) Mode() fs.FileMode {
+	if defi.info == nil {
+		return defi.DirEntry.Type()
+	}
+	return defi.info.Mode()
+}
+
+func (defi DirEntryFileInfo) ModTime() time.Time {
+	if defi.info != nil {
+		return defi.info.ModTime()
+	}
+	return time.Time{}
+}
+
+func (defi DirEntryFileInfo) IsDir() bool {
+	return defi.DirEntry.IsDir()
+}
+
+func (defi DirEntryFileInfo) Sys() any {
+	if defi.info != nil {
+		return defi.info.Sys()
+	}
+	return nil
+}
+
+func (defi *DirEntryFileInfo) GetInfo() error {
+	fi, err := defi.DirEntry.Info()
+	if err != nil {
+		return err
+	}
+	defi.info = fi
+	return nil
 }

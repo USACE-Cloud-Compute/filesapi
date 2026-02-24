@@ -189,6 +189,15 @@ type DeleteObjectInput struct {
 type WalkInput struct {
 	Path     PathConfig
 	Progress ProgressFunction
+
+	//file system only option
+	//use filepath Walk instead of WalkDir
+	FsUseWalk bool
+
+	//if using WalkDir on a file system
+	//when true will return a full fs.FileInfo struct
+	//when false will return a DirEntryFileInfo that uses the DirEntry fields to create a FileInfo subset
+	FsFullInfo bool
 }
 
 type CopyObjectInput struct {
