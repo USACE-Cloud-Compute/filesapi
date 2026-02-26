@@ -97,7 +97,7 @@ func (obj *S3FileInfo) Size() int64 {
 }
 
 func (obj *S3FileInfo) Mode() os.FileMode {
-	return os.ModeIrregular
+	return 0644
 }
 
 func (obj *S3FileInfo) ModTime() time.Time {
