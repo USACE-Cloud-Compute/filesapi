@@ -53,6 +53,10 @@ func (f *FileNotFoundError) Error() string {
 type PathConfig struct {
 	Path  string
 	Paths []string
+
+	//optional context used for interface methods that take a PathConfig as a direct argument
+	//context.Background is used if no context is provided
+	Context context.Context
 }
 
 func (pc PathConfig) IsNil() bool {
@@ -64,7 +68,9 @@ func (pc PathConfig) IsNil() bool {
 
 type FileOperationOutput struct {
 
-	//AWS Etag for S3 results.  MD5 hash for file system operations
+	//AWS Etag for S3 results.
+	// MD5 hash for file system operations
+	// used specifically to identify uniqueness not for file integrity
 	ETag string
 }
 
@@ -92,6 +98,9 @@ type UploadConfig struct {
 
 	//chunk data
 	Data []byte
+
+	//optional caller provided context. context.Background is used if no context is provided
+	Context context.Context
 }
 
 type CompletedObjectUploadConfig struct {
@@ -104,6 +113,9 @@ type CompletedObjectUploadConfig struct {
 
 	//ETags for uploaded parts
 	ChunkUploadIds []string
+
+	//optional caller provided context. context.Background is used if no context is provided
+	Context context.Context
 }
 
 type UploadResult struct {
@@ -130,6 +142,9 @@ type GetObjectInput struct {
 	// https://www.rfc-editor.org/rfc/rfc9110.html#name-range
 	//Note: Does not support multiple ranges in a single request
 	Range string
+
+	//optional caller provided context. context.Background is used if no context is provided
+	Context context.Context
 }
 
 type PutObjectInput struct {
@@ -138,6 +153,9 @@ type PutObjectInput struct {
 	Mutipart   bool
 	PartSize   int
 	Encryption EncryptionStrategy
+
+	//optional caller provided context. context.Background is used if no context is provided
+	Context context.Context
 }
 
 type Range struct {
@@ -184,6 +202,9 @@ func (obs *ObjectSource) GetReader() (io.Reader, error) {
 type DeleteObjectInput struct {
 	Paths    PathConfig
 	Progress ProgressFunction
+
+	//optional caller provided context. context.Background is used if no context is provided
+	Context context.Context
 }
 
 type WalkInput struct {
@@ -198,12 +219,18 @@ type WalkInput struct {
 	//when true will return a full fs.FileInfo struct
 	//when false will return a DirEntryFileInfo that uses the DirEntry fields to create a FileInfo subset
 	FsFullInfo bool
+
+	//optional caller provided context. context.Background is used if no context is provided
+	Context context.Context
 }
 
 type CopyObjectInput struct {
 	Src      PathConfig
 	Dest     PathConfig
 	Progress ProgressFunction
+
+	//optional caller provided context. context.Background is used if no context is provided
+	Context context.Context
 }
 
 type ListDirInput struct {
@@ -211,6 +238,9 @@ type ListDirInput struct {
 	Page   int
 	Size   int32
 	Filter string
+
+	//optional caller provided context. context.Background is used if no context is provided
+	Context context.Context
 }
 
 type FileStore interface {

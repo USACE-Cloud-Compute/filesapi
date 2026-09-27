@@ -161,6 +161,11 @@ func (s3fs *S3FS) ResourceName() string {
 }
 
 func (s3fs *S3FS) GetObjectInfo(path PathConfig) (fs.FileInfo, error) {
+
+	if path.Context == nil {
+		path.Context = context.Background()
+	}
+
 	s3Path := strings.TrimPrefix(path.Path, "/")
 	params := &s3.GetObjectAttributesInput{
 		Bucket: &s3fs.config.S3Bucket,
@@ -171,7 +176,7 @@ func (s3fs *S3FS) GetObjectInfo(path PathConfig) (fs.FileInfo, error) {
 		},
 	}
 
-	resp, err := s3fs.s3client.GetObjectAttributes(context.TODO(), params)
+	resp, err := s3fs.s3client.GetObjectAttributes(path.Context, params)
 	if errors.As(err, &noSuchKey) {
 		err = &FileNotFoundError{path.Path}
 	}
@@ -179,6 +184,9 @@ func (s3fs *S3FS) GetObjectInfo(path PathConfig) (fs.FileInfo, error) {
 }
 
 func (s3fs *S3FS) ListDir(input ListDirInput) (*[]FileStoreResultObject, error) {
+	if input.Context == nil {
+		input.Context = context.Background()
+	}
 	s3Path := strings.TrimPrefix(input.Path.Path, "/")
 
 	var continuationToken *string = nil
@@ -258,7 +266,7 @@ func (s3fs *S3FS) getAllUpToMax(input ListDirInput, params *s3.ListObjectsV2Inpu
 
 	for shouldContinue {
 		params.ContinuationToken = continuationToken
-		resp, err := s3fs.s3client.ListObjectsV2(context.TODO(), params)
+		resp, err := s3fs.s3client.ListObjectsV2(input.Context, params)
 		if err != nil {
 			log.Printf("failed to list objects in the bucket - %v", err)
 			return nil, nil, err
@@ -308,7 +316,7 @@ func (s3fs *S3FS) getPage(input ListDirInput, params *s3.ListObjectsV2Input) ([]
 	paginator := s3.NewListObjectsV2Paginator(s3fs.s3client, params)
 	for paginator.HasMorePages() {
 		if currentPage == input.Page {
-			page, err := paginator.NextPage(context.TODO())
+			page, err := paginator.NextPage(input.Context)
 			if err != nil {
 				return nil, nil, fmt.Errorf("unable to get page, %v", err)
 			}
@@ -317,7 +325,7 @@ func (s3fs *S3FS) getPage(input ListDirInput, params *s3.ListObjectsV2Input) ([]
 			break
 		}
 		currentPage++
-		_, err := paginator.NextPage(context.TODO())
+		_, err := paginator.NextPage(input.Context)
 		if err != nil {
 			return nil, nil, fmt.Errorf("unable to get page, %v", err)
 		}
@@ -328,6 +336,9 @@ func (s3fs *S3FS) getPage(input ListDirInput, params *s3.ListObjectsV2Input) ([]
 // @TODO should this return an error on failure to list?  Think so!
 // @TODO change argument to ListFileInput
 func (s3fs *S3FS) GetDir(path PathConfig) (*[]FileStoreResultObject, error) {
+	if path.Context == nil {
+		path.Context = context.Background()
+	}
 	s3Path := strings.TrimPrefix(path.Path, "/")
 
 	shouldContinue := true
@@ -344,7 +355,7 @@ func (s3fs *S3FS) GetDir(path PathConfig) (*[]FileStoreResultObject, error) {
 			ContinuationToken: continuationToken,
 		}
 
-		resp, err := s3fs.s3client.ListObjectsV2(context.TODO(), params)
+		resp, err := s3fs.s3client.ListObjectsV2(path.Context, params)
 		if err != nil {
 			log.Printf("failed to list objects in the bucket - %v", err)
 			return nil, err
@@ -393,13 +404,16 @@ func (s3fs *S3FS) GetDir(path PathConfig) (*[]FileStoreResultObject, error) {
 }
 
 func (s3fs *S3FS) GetObject(goi GetObjectInput) (io.ReadCloser, error) {
+	if goi.Context == nil {
+		goi.Context = context.Background()
+	}
 	s3Path := strings.TrimPrefix(goi.Path.Path, "/")
 	input := &s3.GetObjectInput{
 		Bucket: &s3fs.config.S3Bucket,
 		Key:    &s3Path,
 		Range:  &goi.Range,
 	}
-	output, err := s3fs.s3client.GetObject(context.TODO(), input)
+	output, err := s3fs.s3client.GetObject(goi.Context, input)
 	if err != nil {
 		if errors.As(err, &noSuchKey) {
 			err = &FileNotFoundError{goi.Path.Path}
@@ -410,6 +424,9 @@ func (s3fs *S3FS) GetObject(goi GetObjectInput) (io.ReadCloser, error) {
 }
 
 func (s3fs *S3FS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
+	if poi.Context == nil {
+		poi.Context = context.Background()
+	}
 	s3Path := strings.TrimPrefix(poi.Dest.Path, "/")
 	reader, err := poi.Source.GetReader()
 	if err != nil {
@@ -418,7 +435,7 @@ func (s3fs *S3FS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 	//defer reader.Close()
 	if poi.Mutipart {
 		uploader := manager.NewUploader(s3fs.s3client)
-		s3output, err := uploader.Upload(context.TODO(), &s3.PutObjectInput{
+		s3output, err := uploader.Upload(poi.Context, &s3.PutObjectInput{
 			Bucket: &s3fs.config.S3Bucket,
 			Key:    &s3Path,
 			Body:   reader,
@@ -443,7 +460,7 @@ func (s3fs *S3FS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 		if poi.Encryption == DefaultEncryption || poi.Encryption == AesEncryption {
 			input.ServerSideEncryption = types.ServerSideEncryptionAes256
 		}
-		s3output, err := s3fs.s3client.PutObject(context.TODO(), input)
+		s3output, err := s3fs.s3client.PutObject(poi.Context, input)
 		if err != nil {
 			return nil, err
 		}
@@ -456,6 +473,9 @@ func (s3fs *S3FS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 }
 
 func (s3fs *S3FS) DeleteObjects(doi DeleteObjectInput) []error {
+	if doi.Context == nil {
+		doi.Context = context.Background()
+	}
 
 	objects := make([]types.ObjectIdentifier, 0, len(doi.Paths.Paths))
 	for _, p := range doi.Paths.Paths {
@@ -475,11 +495,11 @@ func (s3fs *S3FS) DeleteObjects(doi DeleteObjectInput) []error {
 		},
 	}
 
-	return s3fs.deleteListImpl(input, doi.Progress)
+	return s3fs.deleteListImpl(doi.Context, input, doi.Progress)
 
 }
 
-func (s3fs *S3FS) deleteListImpl(input *s3.DeleteObjectsInput, pf ProgressFunction) []error {
+func (s3fs *S3FS) deleteListImpl(ctx context.Context, input *s3.DeleteObjectsInput, pf ProgressFunction) []error {
 	errs := []error{}
 	s3fs.ignoreContinuationOnWalk = true
 	defer func() {
@@ -489,7 +509,7 @@ func (s3fs *S3FS) deleteListImpl(input *s3.DeleteObjectsInput, pf ProgressFuncti
 	delBuffer := []types.ObjectIdentifier{}
 	count := 0
 	for _, obj := range input.Delete.Objects {
-		info, err1 := s3fs.GetObjectInfo(PathConfig{Path: *obj.Key})
+		info, err1 := s3fs.GetObjectInfo(PathConfig{Path: *obj.Key, Context: ctx})
 		if err1 != nil {
 			//if we get a filenotfound error, then attempt to traverse it as a path
 			//otherwise quit
@@ -499,11 +519,11 @@ func (s3fs *S3FS) deleteListImpl(input *s3.DeleteObjectsInput, pf ProgressFuncti
 			}
 		}
 		if info.IsDir() {
-			s3fs.Walk(WalkInput{Path: PathConfig{Path: *obj.Key}, Progress: pf}, func(path string, file os.FileInfo) error {
+			s3fs.Walk(WalkInput{Path: PathConfig{Path: *obj.Key}, Progress: pf, Context: ctx}, func(path string, file os.FileInfo) error {
 				key := file.Name()
 				delBuffer = append(delBuffer, types.ObjectIdentifier{Key: &key})
 				if len(delBuffer) >= maxDelBufferSize {
-					errs := s3fs.flushDeletes(delBuffer)
+					errs := s3fs.flushDeletes(ctx, delBuffer)
 					if len(errs) > 0 {
 						log.Println("Error in batch delete operation")
 						for _, err := range errs {
@@ -520,7 +540,7 @@ func (s3fs *S3FS) deleteListImpl(input *s3.DeleteObjectsInput, pf ProgressFuncti
 		}
 
 		//flush any remaining deletes
-		errs := s3fs.flushDeletes(delBuffer)
+		errs := s3fs.flushDeletes(ctx, delBuffer)
 		if len(errs) > 0 {
 			log.Println("Error in batch delete operation")
 			for _, err := range errs {
@@ -531,7 +551,7 @@ func (s3fs *S3FS) deleteListImpl(input *s3.DeleteObjectsInput, pf ProgressFuncti
 	return errs
 }
 
-func (s3fs *S3FS) flushDeletes(delBuffer []types.ObjectIdentifier) []error {
+func (s3fs *S3FS) flushDeletes(ctx context.Context, delBuffer []types.ObjectIdentifier) []error {
 	if len(delBuffer) == 0 {
 		return []error{errors.New("nothing to delete")}
 	}
@@ -541,7 +561,7 @@ func (s3fs *S3FS) flushDeletes(delBuffer []types.ObjectIdentifier) []error {
 			Objects: delBuffer,
 		},
 	}
-	out, err := s3fs.deleteObjectsImpl(input)
+	out, err := s3fs.deleteObjectsImpl(ctx, input)
 	if err != nil {
 		return []error{err}
 	}
@@ -557,12 +577,15 @@ func (s3fs *S3FS) flushDeletes(delBuffer []types.ObjectIdentifier) []error {
 	return errs
 }
 
-func (s3fs *S3FS) deleteObjectsImpl(input *s3.DeleteObjectsInput) (*s3.DeleteObjectsOutput, error) {
-	result, err := s3fs.s3client.DeleteObjects(context.TODO(), input)
+func (s3fs *S3FS) deleteObjectsImpl(ctx context.Context, input *s3.DeleteObjectsInput) (*s3.DeleteObjectsOutput, error) {
+	result, err := s3fs.s3client.DeleteObjects(ctx, input)
 	return result, err
 }
 
 func (s3fs *S3FS) CopyObject(coi CopyObjectInput) error {
+	if coi.Context == nil {
+		coi.Context = context.Background()
+	}
 	info, err := s3fs.GetObjectInfo(coi.Src)
 	if err != nil {
 		return err
@@ -577,28 +600,24 @@ func (s3fs *S3FS) CopyObject(coi CopyObjectInput) error {
 			CopySource: &source,
 			Key:        &dest,
 		}
-		_, err = s3fs.s3client.CopyObject(context.TODO(), &input)
+		_, err = s3fs.s3client.CopyObject(coi.Context, &input)
 	} else {
-		s3fs.copyPartsTo(coi.Src, coi.Dest, fileSize)
+		s3fs.copyPartsTo(coi.Context, coi.Src, coi.Dest, fileSize)
 	}
 	return err
 }
 
-func (s3fs *S3FS) copyPartsTo(sourcePath PathConfig, destPath PathConfig, fileSize int64) error {
+func (s3fs *S3FS) copyPartsTo(ctx context.Context, sourcePath PathConfig, destPath PathConfig, fileSize int64) error {
 	source := fmt.Sprintf("%s/%s", s3fs.ResourceName(), strings.TrimPrefix(sourcePath.Path, "/"))
 	dest := strings.TrimPrefix(destPath.Path, "/")
 
-	/*
-		ctx, cancelFn := context.WithTimeout(context.TODO(), 10*time.Minute)
-		defer cancelFn()
-	*/
 	//struct for starting a multipart upload
 	destInput := s3.CreateMultipartUploadInput{
 		Bucket: &s3fs.config.S3Bucket,
 		Key:    &dest,
 	}
 	var uploadId string
-	createOutput, err := s3fs.s3client.CreateMultipartUpload(context.TODO(), &destInput)
+	createOutput, err := s3fs.s3client.CreateMultipartUpload(ctx, &destInput)
 	if err != nil {
 		return err
 	}
@@ -630,7 +649,7 @@ func (s3fs *S3FS) copyPartsTo(sourcePath PathConfig, destPath PathConfig, fileSi
 			UploadId:        &uploadId,
 		}
 
-		partResp, err := s3fs.s3client.UploadPartCopy(context.TODO(), &partInput)
+		partResp, err := s3fs.s3client.UploadPartCopy(ctx, &partInput)
 
 		if err != nil {
 			log.Println("Attempting to abort upload")
@@ -638,7 +657,7 @@ func (s3fs *S3FS) copyPartsTo(sourcePath PathConfig, destPath PathConfig, fileSi
 				UploadId: &uploadId,
 			}
 			//ignoring any errors with aborting the copy
-			s3fs.s3client.AbortMultipartUpload(context.TODO(), &abortIn)
+			s3fs.s3client.AbortMultipartUpload(ctx, &abortIn)
 			return fmt.Errorf("Error uploading part %d : %w", partNumber, err)
 		}
 
@@ -671,7 +690,7 @@ func (s3fs *S3FS) copyPartsTo(sourcePath PathConfig, destPath PathConfig, fileSi
 		UploadId:        &uploadId,
 		MultipartUpload: &mpu,
 	}
-	compOutput, err := s3fs.s3client.CompleteMultipartUpload(context.TODO(), &complete)
+	compOutput, err := s3fs.s3client.CompleteMultipartUpload(ctx, &complete)
 	if err != nil {
 		return fmt.Errorf("Error completing upload: %w", err)
 	}
@@ -683,6 +702,9 @@ func (s3fs *S3FS) copyPartsTo(sourcePath PathConfig, destPath PathConfig, fileSi
 }
 
 func (s3fs *S3FS) InitializeObjectUpload(u UploadConfig) (UploadResult, error) {
+	if u.Context == nil {
+		u.Context = context.Background()
+	}
 	output := UploadResult{}
 	s3path := u.ObjectPath //@TODO incomoplete
 	s3path = strings.TrimPrefix(s3path, "/")
@@ -691,7 +713,7 @@ func (s3fs *S3FS) InitializeObjectUpload(u UploadConfig) (UploadResult, error) {
 		Key:    &s3path,
 	}
 
-	resp, err := s3fs.s3client.CreateMultipartUpload(context.TODO(), input)
+	resp, err := s3fs.s3client.CreateMultipartUpload(u.Context, input)
 	if err != nil {
 		return output, err
 	}
@@ -700,6 +722,9 @@ func (s3fs *S3FS) InitializeObjectUpload(u UploadConfig) (UploadResult, error) {
 }
 
 func (s3fs *S3FS) WriteChunk(u UploadConfig) (UploadResult, error) {
+	if u.Context == nil {
+		u.Context = context.Background()
+	}
 	s3path := u.ObjectPath //@TODO incomplete
 	s3path = strings.TrimPrefix(s3path, "/")
 	partNumber := u.ChunkId + 1 //aws chunks are 1 to n, our chunks are 0 referenced
@@ -711,7 +736,7 @@ func (s3fs *S3FS) WriteChunk(u UploadConfig) (UploadResult, error) {
 		UploadId:      &u.UploadId,
 		ContentLength: Ref(int64(len(u.Data))),
 	}
-	result, err := s3fs.s3client.UploadPart(context.TODO(), partInput)
+	result, err := s3fs.s3client.UploadPart(u.Context, partInput)
 
 	if err != nil {
 		return UploadResult{}, err
@@ -724,6 +749,9 @@ func (s3fs *S3FS) WriteChunk(u UploadConfig) (UploadResult, error) {
 }
 
 func (s3fs *S3FS) CompleteObjectUpload(u CompletedObjectUploadConfig) error {
+	if u.Context == nil {
+		u.Context = context.Background()
+	}
 	s3path := u.ObjectPath //@TODO incomplete
 	s3path = strings.TrimPrefix(s3path, "/")
 	cp := []types.CompletedPart{}
@@ -742,12 +770,15 @@ func (s3fs *S3FS) CompleteObjectUpload(u CompletedObjectUploadConfig) error {
 			Parts: cp,
 		},
 	}
-	result, err := s3fs.s3client.CompleteMultipartUpload(context.TODO(), input)
+	result, err := s3fs.s3client.CompleteMultipartUpload(u.Context, input)
 	fmt.Print(result)
 	return err
 }
 
 func (s3fs *S3FS) Walk(input WalkInput, vistorFunction FileVisitFunction) error {
+	if input.Context == nil {
+		input.Context = context.Background()
+	}
 	s3Path := strings.TrimPrefix(input.Path.Path, "/")
 	s3delim := ""
 	query := &s3.ListObjectsV2Input{
@@ -760,7 +791,7 @@ func (s3fs *S3FS) Walk(input WalkInput, vistorFunction FileVisitFunction) error 
 	truncatedListing := true
 	count := 0
 	for truncatedListing {
-		resp, err := s3fs.s3client.ListObjectsV2(context.TODO(), query)
+		resp, err := s3fs.s3client.ListObjectsV2(input.Context, query)
 		if err != nil {
 			return err
 		}
@@ -797,13 +828,16 @@ these functions are not part of the filestore interface and are unique to the S3
 */
 
 func (s3fs *S3FS) GetPresignedUrl(path PathConfig, days int) (string, error) {
+	if path.Context == nil {
+		path.Context = context.Background()
+	}
 	s3Path := strings.TrimPrefix(path.Path, "/")
 	presignClient := s3.NewPresignClient(s3fs.s3client)
 	input := &s3.GetObjectInput{
 		Bucket: &s3fs.config.S3Bucket,
 		Key:    &s3Path,
 	}
-	request, err := presignClient.PresignGetObject(context.TODO(), input, func(opts *s3.PresignOptions) {
+	request, err := presignClient.PresignGetObject(path.Context, input, func(opts *s3.PresignOptions) {
 		opts.Expires = time.Duration(time.Duration(24*days) * time.Hour)
 	})
 
@@ -814,6 +848,9 @@ func (s3fs *S3FS) GetPresignedUrl(path PathConfig, days int) (string, error) {
 }
 
 func (s3fs *S3FS) SetObjectPublic(path PathConfig) (string, error) {
+	if path.Context == nil {
+		path.Context = context.Background()
+	}
 	s3Path := strings.TrimPrefix(path.Path, "/")
 	acl := types.ObjectCannedACLPublicRead
 	input := &s3.PutObjectAclInput{
@@ -821,7 +858,7 @@ func (s3fs *S3FS) SetObjectPublic(path PathConfig) (string, error) {
 		Key:    &s3Path,
 		ACL:    acl,
 	}
-	aclResp, err := s3fs.s3client.PutObjectAcl(context.TODO(), input)
+	aclResp, err := s3fs.s3client.PutObjectAcl(path.Context, input)
 	if err != nil {
 		log.Printf("Failed to add public-read ACL on %s\n", s3Path)
 		log.Println(aclResp)
@@ -842,12 +879,3 @@ func buildCopySourceRange(start int64, objectSize int64) string {
 	stopRange := strconv.FormatInt(end, 10)
 	return "bytes=" + startRange + "-" + stopRange
 }
-
-/*
- create prrfix/object slices
- while shouldcontinue
-   get list
-
-   add list files/prefixes to slices
-   if continuation keep looping
-*/
