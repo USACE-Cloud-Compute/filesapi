@@ -338,7 +338,7 @@ func NewFileStore(fsconfig any) (FileStore, error) {
 		}
 
 		cfg, err = config.LoadDefaultConfig(
-			context.TODO(),
+			context.Background(),
 			loadOptions...,
 		)
 

@@ -36,7 +36,7 @@ func (b *BlockFS) GetObjectInfo(path PathConfig) (fs.FileInfo, error) {
 	return file, err
 }
 
-func (b *BlockFS) ListDir(input ListDirInput) (*[]FileStoreResultObject, error) {
+func (b *BlockFS) ListDirOld(input ListDirInput) (*[]FileStoreResultObject, error) {
 	dirContents, err := ioutil.ReadDir(input.Path.Path)
 	if err != nil {
 		return nil, err
@@ -58,7 +58,36 @@ func (b *BlockFS) ListDir(input ListDirInput) (*[]FileStoreResultObject, error) 
 	return &objects, nil
 }
 
-func (b *BlockFS) GetDir(path PathConfig) (*[]FileStoreResultObject, error) {
+func (b *BlockFS) ListDir(input ListDirInput) (*[]FileStoreResultObject, error) {
+	entries, err := os.ReadDir(input.Path.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	objects := make([]FileStoreResultObject, len(entries))
+	for i, entry := range entries {
+		// os.DirEntry requires calling Info() to access Size and ModTime
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+
+		size := strconv.FormatInt(info.Size(), 10)
+		objects[i] = FileStoreResultObject{
+			ID:         i,
+			Name:       entry.Name(),
+			Size:       size,
+			Path:       input.Path.Path,
+			Type:       filepath.Ext(entry.Name()),
+			IsDir:      entry.IsDir(),
+			Modified:   info.ModTime(),
+			ModifiedBy: "",
+		}
+	}
+	return &objects, nil
+}
+
+func (b *BlockFS) GetDirOld(path PathConfig) (*[]FileStoreResultObject, error) {
 	dirContents, err := ioutil.ReadDir(path.Path)
 	if err != nil {
 		return nil, err
@@ -74,6 +103,35 @@ func (b *BlockFS) GetDir(path PathConfig) (*[]FileStoreResultObject, error) {
 			Type:       filepath.Ext(f.Name()),
 			IsDir:      f.IsDir(),
 			Modified:   f.ModTime(),
+			ModifiedBy: "",
+		}
+	}
+	return &objects, nil
+}
+
+func (b *BlockFS) GetDir(path PathConfig) (*[]FileStoreResultObject, error) {
+	entries, err := os.ReadDir(path.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	objects := make([]FileStoreResultObject, len(entries))
+	for i, entry := range entries {
+		// os.DirEntry requires calling Info() to access Size and ModTime
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+
+		size := strconv.FormatInt(info.Size(), 10)
+		objects[i] = FileStoreResultObject{
+			ID:         i,
+			Name:       entry.Name(),
+			Size:       size,
+			Path:       path.Path,
+			Type:       filepath.Ext(entry.Name()),
+			IsDir:      entry.IsDir(),
+			Modified:   info.ModTime(),
 			ModifiedBy: "",
 		}
 	}
@@ -134,7 +192,8 @@ func (b *BlockFS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 	}
 	defer f.Close()
 
-	_, err = io.Copy(f, src)
+	_, err = CopyWithContext(poi.Context, f, src)
+	//_, err = io.Copy(f, src)
 	if err != nil {
 		return nil, err
 	}
@@ -160,13 +219,21 @@ func (b *BlockFS) CopyObject(coi CopyObjectInput) error {
 	}
 	defer dest.Close()
 
-	_, err = io.Copy(dest, src)
+	_, err = CopyWithContext(coi.Context, dest, src)
+	//_, err = io.Copy(dest, src)
 	return err
 }
 
 func (b *BlockFS) DeleteObjects(doi DeleteObjectInput) []error {
 	var err error
 	for i, p := range doi.Paths.Paths {
+		if doi.Context != nil {
+			select {
+			case <-doi.Context.Done():
+				return []error{doi.Context.Err()}
+			default:
+			}
+		}
 		if isDir(p) {
 			err = os.RemoveAll(p)
 		} else {
@@ -224,6 +291,14 @@ func (b *BlockFS) Walk(input WalkInput, visitorFunction FileVisitFunction) error
 				if err != nil {
 					return err
 				}
+				if input.Context != nil {
+					select {
+					case <-input.Context.Done():
+						return input.Context.Err()
+					default:
+					}
+				}
+
 				err = visitorFunction(path, fileinfo)
 				return err
 			})

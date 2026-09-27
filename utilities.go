@@ -2,11 +2,13 @@ package filesapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	b64 "encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"net/url"
@@ -202,4 +204,23 @@ func FileExists(fs FileStore, path string) bool {
 
 func Ref[T any](t T) *T {
 	return &t
+}
+
+func CopyWithContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
+	// If the source reader supports a Close method, we can stop io.Copy
+	// mid-stream by closing the source when the context is cancelled.
+	if closer, ok := src.(io.ReadCloser); ok {
+		stop := context.AfterFunc(ctx, func() {
+			closer.Close()
+		})
+		defer stop() // Clean up the AfterFunc registration
+	}
+
+	n, err := io.Copy(dst, src)
+
+	// If the context was canceled, return the context error instead of a generic "closed" error
+	if ctx.Err() != nil {
+		return n, ctx.Err()
+	}
+	return n, err
 }
