@@ -112,17 +112,19 @@ func (obj *S3FileInfo) Sys() interface{} {
 	return nil
 }
 
-type S3FS_Role struct {
-	ARN string
-}
+// type S3FS_Role struct {
+// 	ARN string
+// }
 
 type S3FS_Attached struct {
-	Profile string
+	Profile     string
+	AssumedRole string
 }
 
 type S3FS_Static struct {
-	S3Id  string
-	S3Key string
+	S3Id        string
+	S3Key       string
+	AssumedRole string
 }
 
 type S3FSConfig struct {
@@ -133,6 +135,7 @@ type S3FSConfig struct {
 	AltEndpoint string
 	Credentials any
 	AwsOptions  []func(*config.LoadOptions) error
+	AssumedRole string
 }
 
 type MinioFSConfig struct {
@@ -771,7 +774,7 @@ func (s3fs *S3FS) CompleteObjectUpload(u CompletedObjectUploadConfig) error {
 		},
 	}
 	result, err := s3fs.s3client.CompleteMultipartUpload(u.Context, input)
-	fmt.Print(result)
+	_ = result
 	return err
 }
 
@@ -831,13 +834,14 @@ func (s3fs *S3FS) GetPresignedUrl(path PathConfig, days int) (string, error) {
 	if path.Context == nil {
 		path.Context = context.Background()
 	}
+
 	s3Path := strings.TrimPrefix(path.Path, "/")
 	presignClient := s3.NewPresignClient(s3fs.s3client)
 	input := &s3.GetObjectInput{
 		Bucket: &s3fs.config.S3Bucket,
 		Key:    &s3Path,
 	}
-	request, err := presignClient.PresignGetObject(path.Context, input, func(opts *s3.PresignOptions) {
+	request, err := presignClient.PresignGetObject(context.TODO(), input, func(opts *s3.PresignOptions) {
 		opts.Expires = time.Duration(time.Duration(24*days) * time.Hour)
 	})
 
