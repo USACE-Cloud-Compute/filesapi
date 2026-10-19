@@ -224,3 +224,64 @@ func CopyWithContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, 
 	}
 	return n, err
 }
+
+//-----------------------------------------------------------------
+//-------- Fixing Cryptographic & Presigning issues below ---------
+
+// PresignObjectV2 presigns a URI with single query encoding and deterministic parameter ordering.
+func PresignObjectV2(options PresignInputOptions) (string, error) {
+	if options.Expiration > maxExpiration {
+		return "", errors.New("Expiration time too long")
+	}
+	uri, err := url.Parse(options.Uri)
+	if err != nil {
+		return "", err
+	}
+	qp := uri.Query()
+	qp.Set(timeQueryName, time.Now().UTC().Format(timeFormat))
+	qp.Set(expirationQueryName, strconv.Itoa(options.Expiration))
+	qp.Set(credentialQueryName, b64.StdEncoding.EncodeToString([]byte(options.Credential)))
+	qp.Del(signatureQueryName)
+
+	uri.RawQuery = qp.Encode()
+	signature, err := sign([]byte(uri.String()), options.SigningKey)
+	if err != nil {
+		return "", err
+	}
+	sEnc := b64.StdEncoding.EncodeToString(signature)
+	qp.Set(signatureQueryName, sEnc)
+	uri.RawQuery = qp.Encode()
+	return uri.String(), nil
+}
+
+// VerifySignedObjectV2 verifies a signed URI using constant-time comparison (hmac.Equal)
+// and handles query parameters normalized without double unescaping.
+func VerifySignedObjectV2(options PresignInputOptions) bool {
+	uri, err := url.Parse(options.Uri)
+	if err != nil {
+		return false
+	}
+	sigok := verifySignatureV2(uri, options.SigningKey)
+	timeok := verifyExpiration(uri.Query())
+	return sigok && timeok
+}
+
+func verifySignatureV2(uri *url.URL, key []byte) bool {
+	qp := uri.Query()
+	urlSignature := qp.Get(signatureQueryName)
+	if urlSignature == "" {
+		return false
+	}
+	signature, err := b64.StdEncoding.DecodeString(urlSignature)
+	if err != nil {
+		return false
+	}
+	qp.Del(signatureQueryName)
+	uriCopy := *uri
+	uriCopy.RawQuery = qp.Encode()
+	expectedSignature, err := sign([]byte(uriCopy.String()), key)
+	if err != nil {
+		return false
+	}
+	return hmac.Equal(signature, expectedSignature)
+}
