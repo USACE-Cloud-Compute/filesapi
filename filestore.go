@@ -366,6 +366,12 @@ func NewFileStore(fsconfig any) (FileStore, error) {
 			})
 			assumedCfg := cfg.Copy()
 			assumedCfg.Credentials = aws.NewCredentialsCache(provider)
+
+			// Optional but recommended: fail here if the role cannot be assumed.
+			if _, err := assumedCfg.Credentials.Retrieve(context.Background()); err != nil {
+				return nil, fmt.Errorf("failed to assume role %q: %w", scType.AssumedRole, err)
+			}
+
 			s3Client = s3.NewFromConfig(assumedCfg, f...)
 		} else {
 			s3Client = s3.NewFromConfig(cfg, f...)
