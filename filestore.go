@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -297,7 +298,10 @@ func NewFileStore(fsconfig any) (FileStore, error) {
 		if config.ChunkSize == 0 {
 			config.ChunkSize = defaultChunkSize
 		}
-		fs := BlockFS{fsconfig.(BlockFSConfig)}
+		fs := BlockFS{
+			Config: scType,
+			mutex:  &sync.Mutex{},
+		}
 		return &fs, nil
 	case S3FSConfig:
 		var cfg aws.Config
