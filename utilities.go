@@ -84,7 +84,7 @@ func Count(ci CountInput) (int64, error) {
 
 	} else {
 		var r *regexp.Regexp
-		r, err := regexp.Compile("")
+		r, err := regexp.Compile(ci.Pattern)
 		if err != nil {
 			return -1, fmt.Errorf("Failed to compile file search pattern: %s\n", err)
 		}
