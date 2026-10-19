@@ -8,16 +8,20 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 type PATHTYPE int
@@ -294,7 +298,10 @@ func NewFileStore(fsconfig any) (FileStore, error) {
 		if config.ChunkSize == 0 {
 			config.ChunkSize = defaultChunkSize
 		}
-		fs := BlockFS{fsconfig.(BlockFSConfig)}
+		fs := BlockFS{
+			Config: scType,
+			mutex:  &sync.Mutex{},
+		}
 		return &fs, nil
 	case S3FSConfig:
 		var cfg aws.Config
@@ -330,9 +337,6 @@ func NewFileStore(fsconfig any) (FileStore, error) {
 			if cred.Profile != "" {
 				loadOptions = append(loadOptions, config.WithSharedConfigProfile(cred.Profile))
 			}
-		case S3FS_Role:
-			return nil, errors.New("Assumed rules are not supported")
-
 		default:
 			return nil, errors.New("Invalid S3 Credentials")
 		}
@@ -341,7 +345,6 @@ func NewFileStore(fsconfig any) (FileStore, error) {
 			context.Background(),
 			loadOptions...,
 		)
-
 		if err != nil {
 			return nil, err
 		}
@@ -357,7 +360,26 @@ func NewFileStore(fsconfig any) (FileStore, error) {
 			endpointUrl := fmt.Sprintf("%s/%s", scType.AltEndpoint, scType.S3Bucket)
 			f = append(f, func(o *s3.Options) { o.EndpointResolverV2 = &StaticResolver{Url: endpointUrl} })
 		}
-		s3Client := s3.NewFromConfig(cfg, f...)
+		var s3Client *s3.Client
+		if scType.AssumedRole != "" {
+			log.Printf("Assuming Role: %s\n", scType.AssumedRole)
+			stsClient := sts.NewFromConfig(cfg)
+
+			provider := stscreds.NewAssumeRoleProvider(stsClient, scType.AssumedRole, func(o *stscreds.AssumeRoleOptions) {
+				o.RoleSessionName = "batch-cross-account-s3"
+			})
+			assumedCfg := cfg.Copy()
+			assumedCfg.Credentials = aws.NewCredentialsCache(provider)
+
+			// Optional but recommended: fail here if the role cannot be assumed.
+			if _, err := assumedCfg.Credentials.Retrieve(context.Background()); err != nil {
+				return nil, fmt.Errorf("failed to assume role %q: %w", scType.AssumedRole, err)
+			}
+
+			s3Client = s3.NewFromConfig(assumedCfg, f...)
+		} else {
+			s3Client = s3.NewFromConfig(cfg, f...)
+		}
 
 		fs := S3FS{
 			s3client:  s3Client,
@@ -367,58 +389,27 @@ func NewFileStore(fsconfig any) (FileStore, error) {
 		}
 		return &fs, nil
 
-	case MinioFSConfig:
-		maxKeys := DEFAULTMAXKEYS
-		if scType.MaxKeys > 0 {
-			maxKeys = scType.MaxKeys
-		}
-		delimiter := DEFAULTDELIMITER
-		if scType.Delimiter != "" {
-			delimiter = scType.Delimiter
-		}
-		loadOptions := []func(*config.LoadOptions) error{}
-		if scType.AwsOptions != nil {
-			loadOptions = append(loadOptions, scType.AwsOptions...)
-		}
-		loadOptions = append(loadOptions, config.WithRegion(scType.S3Region))
+	/*
+		stsClient := sts.NewFromConfig(cfg)
 
-		resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...any) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				PartitionID:       "aws",
-				URL:               scType.HostAddress,
-				SigningRegion:     scType.S3Region,
-				HostnameImmutable: true,
-			}, nil
-		})
-
-		var creds S3FS_Static
-		var ok bool
-		if creds, ok = scType.Credentials.(S3FS_Static); !ok {
-			return nil, errors.New("Minio Configure requires static credentials")
-		}
-
-		loadOptions = append(
-			loadOptions, config.WithRegion(scType.S3Region),
-			config.WithEndpointResolverWithOptions(resolver),
-			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(creds.S3Id, creds.S3Key, "")),
+		// Assume the role in the other account.
+		provider := stscreds.NewAssumeRoleProvider(
+			stsClient,
+			roleARN,
+			func(o *stscreds.AssumeRoleOptions) {
+				o.RoleSessionName = "batch-cross-account-s3"
+			},
 		)
 
-		cfg, err := config.LoadDefaultConfig(context.Background(), loadOptions...)
-		if err != nil {
-			return nil, err
-		}
-		s3Client := s3.NewFromConfig(cfg)
-		s3Type := S3FSConfig(scType.S3FSConfig)
-		fs := S3FS{
-			s3client:  s3Client,
-			config:    &s3Type,
-			delimiter: delimiter,
-			maxKeys:   maxKeys,
-		}
-		return &fs, nil
+		// Create a separate credential chain for the target role.
+		assumedCfg := cfg.Copy()
+		assumedCfg.Credentials = aws.NewCredentialsCache(provider)
 
+		// This client uses the assumed role, not job-runner-role directly.
+		return s3.NewFromConfig(assumedCfg), nil
+	*/
 	default:
-		return nil, errors.New(fmt.Sprintf("Invalid File System System Type Configuration: %v", scType))
+		return nil, errors.New(fmt.Sprintf("invalid File System System Type Configuration: %v", scType))
 	}
 }
 

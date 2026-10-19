@@ -26,6 +26,7 @@ type BlockFSConfig struct {
 
 type BlockFS struct {
 	Config BlockFSConfig
+	mutex  *sync.Mutex
 }
 
 func (b *BlockFS) GetObjectInfo(path PathConfig) (fs.FileInfo, error) {
@@ -265,10 +266,8 @@ func (b *BlockFS) InitializeObjectUpload(u UploadConfig) (UploadResult, error) {
 
 func (b *BlockFS) WriteChunk(u UploadConfig) (UploadResult, error) {
 	result := UploadResult{}
-	//var err error
-	mutex := &sync.Mutex{}
-	mutex.Lock()
-	defer mutex.Unlock()
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
 	f, err := os.OpenFile(u.ObjectPath, os.O_WRONLY|os.O_CREATE, 0644) //@TODO incomplete
 	if err != nil {
 		return result, err
