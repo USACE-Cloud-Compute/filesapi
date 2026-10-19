@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -357,6 +358,7 @@ func NewFileStore(fsconfig any) (FileStore, error) {
 		}
 		var s3Client *s3.Client
 		if scType.AssumedRole != "" {
+			log.Printf("Assuming Role: %s\n", scType.AssumedRole)
 			stsClient := sts.NewFromConfig(cfg)
 
 			provider := stscreds.NewAssumeRoleProvider(stsClient, scType.AssumedRole, func(o *stscreds.AssumeRoleOptions) {
