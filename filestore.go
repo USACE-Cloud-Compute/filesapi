@@ -274,13 +274,17 @@ type FileStore interface {
 	//copy an object in a filestore
 	CopyObject(input CopyObjectInput) error
 
-	//initialize a multipart upload sessions
+	//initialize a multipart upload session.
+	//Note: For BlockFS direct-write uploads, upload tracking, chunk ordering,
+	//distributed locking, retries, and stale upload cleanup are managed by the caller.
 	InitializeObjectUpload(UploadConfig) (UploadResult, error)
 
-	//write a chunk in a multipart upload session
+	//write a chunk in a multipart upload session.
+	//Writes chunk bytes directly to the calculated byte offset.
 	WriteChunk(UploadConfig) (UploadResult, error)
 
-	//complete a multipart upload session
+	//complete a multipart upload session.
+	//Finalizes the uploaded object, committing it to the final destination path.
 	CompleteObjectUpload(CompletedObjectUploadConfig) error
 
 	//recursively deletes objects matching the path pattern
