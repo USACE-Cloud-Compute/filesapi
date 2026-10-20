@@ -2,6 +2,7 @@ package filesapi
 
 import (
 	"bytes"
+	"crypto/md5"
 	"errors"
 	"fmt"
 	"io"
@@ -223,46 +224,40 @@ func (b *BlockFS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 		return nil, err
 	}
 	foo := FileOperationOutput{}
-	var err error
-	var src io.Reader
 
-	//get the src reader
-	switch {
-	case poi.Source.Data != nil && len(poi.Source.Data) == 0:
-		err = os.MkdirAll(filepath.Dir(poi.Dest.Path), os.ModePerm)
+	//handle case for creating a new directory path
+	if poi.Source.Data != nil && len(poi.Source.Data) == 0 {
+		err := os.MkdirAll(filepath.Dir(poi.Dest.Path), os.ModePerm)
 		return &foo, err
-	case poi.Source.Data != nil:
-		src = bytes.NewReader(poi.Source.Data)
-	case poi.Source.Filepath.Path != "":
-		f, err := os.OpenFile(poi.Source.Filepath.Path, os.O_RDONLY, os.ModePerm)
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		src = f
-	case poi.Source.Reader != nil:
-		src = poi.Source.Reader
 	}
 
-	//opena and write to the destination
-	f, err := os.OpenFile(poi.Dest.Path, os.O_RDWR|os.O_CREATE, os.ModePerm)
+	src, err := poi.Source.GetReader()
+	if err != nil {
+		return nil, fmt.Errorf("unable to get the source reader: %s", err)
+	}
+	//defer close the source if it is a readcloser
+	if closer, ok := src.(io.Closer); ok {
+		defer closer.Close()
+	}
+
+	//open and write to the destination
+	f, err := os.OpenFile(poi.Dest.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	_, err = CopyWithContext(poi.Context, f, src)
-	//_, err = io.Copy(f, src)
+	// write to the file and compute the hash simultaneously
+	h := md5.New()
+	mw := io.MultiWriter(f, h)
+
+	_, err = CopyWithContext(poi.Context, mw, src)
 	if err != nil {
 		return nil, err
 	}
 
-	md5, err := getFileMd5(f)
-	if err != nil {
-		return nil, err
-	}
-	foo.ETag = md5
-	return &foo, err
+	foo.ETag = fmt.Sprintf("%x", h.Sum(nil))
+	return &foo, nil
 }
 
 func (b *BlockFS) CopyObject(coi CopyObjectInput) error {
