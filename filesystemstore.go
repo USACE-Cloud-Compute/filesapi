@@ -23,6 +23,7 @@ var pathError *fs.PathError
 // as of now I don't actually need any config properties
 type BlockFSConfig struct {
 	ChunkSize int64
+	BaseDir   string
 }
 
 type BlockFS struct {
@@ -30,7 +31,35 @@ type BlockFS struct {
 	mutex  *sync.Mutex
 }
 
+// verifyPath checks whether p resides within b.Config.BaseDir.
+// If BaseDir is unset, it allows the path.
+func (b *BlockFS) verifyPath(p string) error {
+	if b.Config.BaseDir == "" {
+		return nil
+	}
+
+	base, err := filepath.Abs(filepath.Clean(b.Config.BaseDir))
+	if err != nil {
+		return fmt.Errorf("invalid base directory: %w", err)
+	}
+
+	target, err := filepath.Abs(filepath.Clean(p))
+	if err != nil {
+		return fmt.Errorf("invalid target path: %w", err)
+	}
+
+	rel, err := filepath.Rel(base, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path traversal violation: %q is outside base directory %q", p, base)
+	}
+
+	return nil
+}
+
 func (b *BlockFS) GetObjectInfo(path PathConfig) (fs.FileInfo, error) {
+	if err := b.verifyPath(path.Path); err != nil {
+		return nil, err
+	}
 	file, err := os.Stat(path.Path)
 	if errors.As(err, &pathError) {
 		err = &FileNotFoundError{path.Path}
@@ -39,6 +68,9 @@ func (b *BlockFS) GetObjectInfo(path PathConfig) (fs.FileInfo, error) {
 }
 
 func (b *BlockFS) ListDirOld(input ListDirInput) (*[]FileStoreResultObject, error) {
+	if err := b.verifyPath(input.Path.Path); err != nil {
+		return nil, err
+	}
 	dirContents, err := ioutil.ReadDir(input.Path.Path)
 	if err != nil {
 		return nil, err
@@ -61,6 +93,9 @@ func (b *BlockFS) ListDirOld(input ListDirInput) (*[]FileStoreResultObject, erro
 }
 
 func (b *BlockFS) ListDir(input ListDirInput) (*[]FileStoreResultObject, error) {
+	if err := b.verifyPath(input.Path.Path); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(input.Path.Path)
 	if err != nil {
 		return nil, err
@@ -90,6 +125,9 @@ func (b *BlockFS) ListDir(input ListDirInput) (*[]FileStoreResultObject, error) 
 }
 
 func (b *BlockFS) GetDirOld(path PathConfig) (*[]FileStoreResultObject, error) {
+	if err := b.verifyPath(path.Path); err != nil {
+		return nil, err
+	}
 	dirContents, err := ioutil.ReadDir(path.Path)
 	if err != nil {
 		return nil, err
@@ -112,6 +150,9 @@ func (b *BlockFS) GetDirOld(path PathConfig) (*[]FileStoreResultObject, error) {
 }
 
 func (b *BlockFS) GetDir(path PathConfig) (*[]FileStoreResultObject, error) {
+	if err := b.verifyPath(path.Path); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(path.Path)
 	if err != nil {
 		return nil, err
@@ -145,6 +186,9 @@ func (b *BlockFS) ResourceName() string {
 }
 
 func (b *BlockFS) GetObject(goi GetObjectInput) (io.ReadCloser, error) {
+	if err := b.verifyPath(goi.Path.Path); err != nil {
+		return nil, err
+	}
 	reader, err := os.Open(goi.Path.Path)
 	if goi.Range == "" || err != nil {
 		if errors.As(err, &pathError) {
@@ -165,6 +209,9 @@ func (b *BlockFS) GetObject(goi GetObjectInput) (io.ReadCloser, error) {
 }
 
 func (b *BlockFS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
+	if err := b.verifyPath(poi.Dest.Path); err != nil {
+		return nil, err
+	}
 	foo := FileOperationOutput{}
 	var err error
 	var src io.Reader
@@ -209,6 +256,12 @@ func (b *BlockFS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 }
 
 func (b *BlockFS) CopyObject(coi CopyObjectInput) error {
+	if err := b.verifyPath(coi.Src.Path); err != nil {
+		return err
+	}
+	if err := b.verifyPath(coi.Dest.Path); err != nil {
+		return err
+	}
 	src, err := os.Open(coi.Src.Path)
 	if err != nil {
 		return err
@@ -227,6 +280,11 @@ func (b *BlockFS) CopyObject(coi CopyObjectInput) error {
 }
 
 func (b *BlockFS) DeleteObjects(doi DeleteObjectInput) []error {
+	for _, p := range doi.Paths.Paths {
+		if err := b.verifyPath(p); err != nil {
+			return []error{err}
+		}
+	}
 	var err error
 	for i, p := range doi.Paths.Paths {
 		if doi.Context != nil {
@@ -297,6 +355,9 @@ func (b *BlockFS) findUploadPath(objectPath, uploadID string) (string, error) {
 }
 
 func (b *BlockFS) InitializeObjectUpload(u UploadConfig) (UploadResult, error) {
+	if err := b.verifyPath(u.ObjectPath); err != nil {
+		return UploadResult{}, err
+	}
 	if u.Context != nil {
 		if err := u.Context.Err(); err != nil {
 			return UploadResult{}, err
@@ -328,6 +389,9 @@ func (b *BlockFS) InitializeObjectUpload(u UploadConfig) (UploadResult, error) {
 }
 
 func (b *BlockFS) WriteChunk(u UploadConfig) (UploadResult, error) {
+	if err := b.verifyPath(u.ObjectPath); err != nil {
+		return UploadResult{}, err
+	}
 	if u.Context != nil {
 		if err := u.Context.Err(); err != nil {
 			return UploadResult{}, err
@@ -356,6 +420,9 @@ func (b *BlockFS) WriteChunk(u UploadConfig) (UploadResult, error) {
 }
 
 func (b *BlockFS) CompleteObjectUpload(u CompletedObjectUploadConfig) error {
+	if err := b.verifyPath(u.ObjectPath); err != nil {
+		return err
+	}
 	if u.Context != nil {
 		if err := u.Context.Err(); err != nil {
 			return err
@@ -398,6 +465,9 @@ func (b *BlockFS) CompleteObjectUpload(u CompletedObjectUploadConfig) error {
 }
 
 func (b *BlockFS) Walk(input WalkInput, visitorFunction FileVisitFunction) error {
+	if err := b.verifyPath(input.Path.Path); err != nil {
+		return err
+	}
 	if input.FsUseWalk {
 		err := filepath.Walk(input.Path.Path,
 			func(path string, fileinfo os.FileInfo, err error) error {
