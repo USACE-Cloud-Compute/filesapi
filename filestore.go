@@ -10,6 +10,8 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -303,7 +305,7 @@ func NewFileStore(fsconfig any) (FileStore, error) {
 			config.ChunkSize = defaultChunkSize
 		}
 		fs := BlockFS{
-			Config: scType,
+			Config: config,
 			mutex:  &sync.Mutex{},
 		}
 		return &fs, nil
@@ -433,8 +435,9 @@ func (pp PathParts) ToFilePath(additionalParts ...string) string {
 	return buildUrl(parts, FILE)
 }
 
-func sanitizePath(path string) string {
-	return strings.ReplaceAll(path, "..", "")
+func sanitizePath(p string) string {
+	cleaned := path.Clean("/" + strings.TrimSpace(p))
+	return cleaned
 }
 
 // @TODO this is duplicated!!!!
@@ -442,9 +445,10 @@ func buildUrl(urlparts []string, pathType PATHTYPE) string {
 	var b strings.Builder
 	t := "/%s"
 	for _, p := range urlparts {
-		p = strings.Trim(strings.ReplaceAll(p, "//", "/"), "/")
-		//p = strings.Trim(p, "/")
-		if p != "" {
+		p = strings.Trim(filepath.ToSlash(p), "/")
+		p = path.Clean("/" + p)
+		p = strings.TrimPrefix(p, "/")
+		if p != "" && p != "." {
 			fmt.Fprintf(&b, t, p)
 		}
 	}
