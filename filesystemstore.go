@@ -190,12 +190,22 @@ func (b *BlockFS) GetObject(goi GetObjectInput) (io.ReadCloser, error) {
 		return nil, err
 	}
 	reader, err := os.Open(goi.Path.Path)
-	if goi.Range == "" || err != nil {
+	if err != nil {
 		if errors.As(err, &pathError) {
 			err = &FileNotFoundError{goi.Path.Path}
 		}
-		return reader, err
+		return nil, err
 	}
+
+	// CASE 1: Full file requested.
+	// Return the handle. The caller will call reader.Close().
+	if goi.Range == "" {
+		return reader, nil
+	}
+
+	// CASE 2: Range requested.
+	// We must close the file ourselves once we are done reading the chunk.
+	defer reader.Close()
 	readRange, err := parseRange(goi.Range)
 	if err != nil {
 		return nil, err
