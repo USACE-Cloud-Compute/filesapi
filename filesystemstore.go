@@ -235,10 +235,7 @@ func (b *BlockFS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to get the source reader: %s", err)
 	}
-	//defer close the source if it is a readcloser
-	if closer, ok := src.(io.Closer); ok {
-		defer closer.Close()
-	}
+	defer poi.Source.Close()
 
 	//open and write to the destination
 	f, err := os.OpenFile(poi.Dest.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, os.ModePerm)

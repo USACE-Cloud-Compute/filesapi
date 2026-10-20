@@ -435,7 +435,7 @@ func (s3fs *S3FS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Unable to get the Source Reader: %s\n", err)
 	}
-	//defer reader.Close()
+	defer poi.Source.Close()
 	if poi.Mutipart {
 		uploader := manager.NewUploader(s3fs.s3client)
 		s3output, err := uploader.Upload(poi.Context, &s3.PutObjectInput{

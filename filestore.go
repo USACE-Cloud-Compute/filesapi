@@ -184,6 +184,9 @@ type ObjectSource struct {
 
 	//a file path to a resource
 	Filepath PathConfig
+
+	//closer
+	closer io.Closer
 }
 
 func (obs *ObjectSource) GetReader() (io.Reader, error) {
@@ -195,7 +198,12 @@ func (obs *ObjectSource) GetReader() (io.Reader, error) {
 		return obs.Reader, nil
 	}
 	if obs.Filepath.Path != "" {
-		return os.Open(obs.Filepath.Path)
+		f, err := os.Open(obs.Filepath.Path)
+		if err != nil {
+			return nil, err
+		}
+		obs.closer = f
+		return f, nil
 	}
 	if obs.Data != nil {
 		cl := int64(len(obs.Data))
@@ -203,6 +211,15 @@ func (obs *ObjectSource) GetReader() (io.Reader, error) {
 		return bytes.NewReader(obs.Data), nil
 	}
 	return nil, errors.New("invalid objectsource configuration")
+}
+
+func (obs *ObjectSource) Close() error {
+	if obs.closer != nil {
+		err := obs.closer.Close()
+		obs.closer = nil
+		return err
+	}
+	return nil
 }
 
 type DeleteObjectInput struct {
