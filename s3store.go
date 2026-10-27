@@ -144,11 +144,11 @@ type MinioFSConfig struct {
 }
 
 type S3FS struct {
-	s3client                 *s3.Client
-	config                   *S3FSConfig
-	delimiter                string
-	maxKeys                  int32
-	ignoreContinuationOnWalk bool //internal use only
+	s3client  *s3.Client
+	config    *S3FSConfig
+	delimiter string
+	maxKeys   int32
+	//ignoreContinuationOnWalk bool //internal use only
 }
 
 func (s3fs *S3FS) GetClient() *s3.Client {
@@ -504,10 +504,6 @@ func (s3fs *S3FS) DeleteObjects(doi DeleteObjectInput) []error {
 
 func (s3fs *S3FS) deleteListImpl(ctx context.Context, input *s3.DeleteObjectsInput, pf ProgressFunction) []error {
 	errs := []error{}
-	s3fs.ignoreContinuationOnWalk = true
-	defer func() {
-		s3fs.ignoreContinuationOnWalk = false
-	}()
 	maxDelBufferSize := 1000
 	delBuffer := []types.ObjectIdentifier{}
 	count := 0
@@ -522,7 +518,7 @@ func (s3fs *S3FS) deleteListImpl(ctx context.Context, input *s3.DeleteObjectsInp
 			}
 		}
 		if info.IsDir() {
-			s3fs.Walk(WalkInput{Path: PathConfig{Path: *obj.Key}, Progress: pf, Context: ctx}, func(path string, file os.FileInfo) error {
+			s3fs.walkImpl(WalkInput{Path: PathConfig{Path: *obj.Key}, Progress: pf, Context: ctx}, func(path string, file os.FileInfo) error {
 				key := file.Name()
 				delBuffer = append(delBuffer, types.ObjectIdentifier{Key: &key})
 				if len(delBuffer) >= maxDelBufferSize {
@@ -537,7 +533,7 @@ func (s3fs *S3FS) deleteListImpl(ctx context.Context, input *s3.DeleteObjectsInp
 				}
 				count++
 				return nil
-			})
+			}, true) //set ignoreContinuationOnWalk to true
 		} else {
 			delBuffer = append(delBuffer, types.ObjectIdentifier{Key: obj.Key})
 		}
@@ -779,6 +775,10 @@ func (s3fs *S3FS) CompleteObjectUpload(u CompletedObjectUploadConfig) error {
 }
 
 func (s3fs *S3FS) Walk(input WalkInput, vistorFunction FileVisitFunction) error {
+	return s3fs.walkImpl(input, vistorFunction, false) //ignoreContinuationOnWalk set to false
+}
+
+func (s3fs *S3FS) walkImpl(input WalkInput, vistorFunction FileVisitFunction, ignoreContinuationOnWalk bool) error {
 	if input.Context == nil {
 		input.Context = context.Background()
 	}
@@ -813,7 +813,7 @@ func (s3fs *S3FS) Walk(input WalkInput, vistorFunction FileVisitFunction) error 
 				})
 			}
 		}
-		if !s3fs.ignoreContinuationOnWalk {
+		if !ignoreContinuationOnWalk {
 			query.ContinuationToken = resp.NextContinuationToken
 		}
 		if resp.IsTruncated == nil {
