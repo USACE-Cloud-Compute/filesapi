@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"io/ioutil"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,8 +21,18 @@ import (
 
 var pathError *fs.PathError
 
-// @TODO this is kind of clunky.  BlockFSConfig is only used in NewFileStore as a type case so we know to create a Block File Store
-// as of now I don't actually need any config properties
+type internalOptions struct {
+	logger *slog.Logger
+}
+
+type Option func(*internalOptions)
+
+func WithLogger(l *slog.Logger) Option {
+	return func(o *internalOptions) {
+		o.logger = l
+	}
+}
+
 type BlockFSConfig struct {
 	ChunkSize int64
 	BaseDir   string
@@ -29,7 +40,31 @@ type BlockFSConfig struct {
 
 type BlockFS struct {
 	Config BlockFSConfig
+	logger *slog.Logger
 	mutex  *sync.Mutex
+}
+
+func NewFileSystemStore(cfg BlockFSConfig, opts ...Option) (*BlockFS, error) {
+	if cfg.ChunkSize == 0 {
+		cfg.ChunkSize = defaultChunkSize
+	}
+
+	options := internalOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	if options.logger == nil {
+		options.logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+	}
+
+	fs := &BlockFS{
+		Config: cfg,
+		logger: options.logger,
+		mutex:  &sync.Mutex{},
+	}
+
+	return fs, nil
 }
 
 // verifyPath checks whether p resides within b.Config.BaseDir.

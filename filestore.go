@@ -8,22 +8,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 type PATHTYPE int
@@ -314,125 +305,15 @@ type FileStore interface {
 	Walk(WalkInput, FileVisitFunction) error
 }
 
+// Deprecated: NewFileStore is deprecated. Use NewFileSystemStore or NewS3Store instead.
 func NewFileStore(fsconfig any) (FileStore, error) {
 	switch scType := fsconfig.(type) {
 	case BlockFSConfig:
-		config := fsconfig.(BlockFSConfig)
-		if config.ChunkSize == 0 {
-			config.ChunkSize = defaultChunkSize
-		}
-		fs := BlockFS{
-			Config: config,
-			mutex:  &sync.Mutex{},
-		}
-		return &fs, nil
+		return NewFileSystemStore(scType)
 	case S3FSConfig:
-		var cfg aws.Config
-		var err error
-		maxKeys := DEFAULTMAXKEYS
-		if scType.MaxKeys > 0 {
-			maxKeys = scType.MaxKeys
-		}
-		delimiter := DEFAULTDELIMITER
-		if scType.Delimiter != "" {
-			delimiter = scType.Delimiter
-		}
-		loadOptions := []func(*config.LoadOptions) error{}
-		if scType.AwsOptions != nil {
-			loadOptions = append(loadOptions, scType.AwsOptions...)
-		}
-		loadOptions = append(loadOptions, config.WithRegion(scType.S3Region))
-		/////AWS RETRY OPTION
-		/*
-			loadOptions = append(loadOptions, config.WithRetryer(func() aws.Retryer {
-				return retry.AddWithMaxBackoffDelay(retry.NewStandard(), time.Second*5)
-			}))
-		*/
-		////
-		switch cred := scType.Credentials.(type) {
-		case S3FS_Static:
-			loadOptions = append(loadOptions, config.WithCredentialsProvider(
-				credentials.NewStaticCredentialsProvider(cred.S3Id, cred.S3Key, ""),
-			))
-		case S3FS_Attached:
-			//if attached credentials are used and cred.Profile=="", then the AWS default credential chain is invoked
-			//otherwise add the profile.
-			if cred.Profile != "" {
-				loadOptions = append(loadOptions, config.WithSharedConfigProfile(cred.Profile))
-			}
-		default:
-			return nil, errors.New("Invalid S3 Credentials")
-		}
-
-		cfg, err = config.LoadDefaultConfig(
-			context.Background(),
-			loadOptions...,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		f := []func(o *s3.Options){}
-		if scType.AltEndpoint != "" {
-			//cant use BaseEndpoint resolver since the driver will modify the domain values
-			//when the domain is not an IP address.  I'm leaving this line in but commented out for now
-			//since I might add separate support for a BasedEndpoint
-			//f = append(f, func(o *s3.Options) { o.BaseEndpoint = &scType.AltEndpoint })
-
-			//the solution for a static endpoint is to implement our own static resolver
-			endpointUrl := fmt.Sprintf("%s/%s", scType.AltEndpoint, scType.S3Bucket)
-			f = append(f, func(o *s3.Options) { o.EndpointResolverV2 = &StaticResolver{Url: endpointUrl} })
-		}
-		var s3Client *s3.Client
-		if scType.AssumedRole != "" {
-			log.Printf("Assuming Role: %s\n", scType.AssumedRole)
-			stsClient := sts.NewFromConfig(cfg)
-
-			provider := stscreds.NewAssumeRoleProvider(stsClient, scType.AssumedRole, func(o *stscreds.AssumeRoleOptions) {
-				o.RoleSessionName = "batch-cross-account-s3"
-			})
-			assumedCfg := cfg.Copy()
-			assumedCfg.Credentials = aws.NewCredentialsCache(provider)
-
-			// Optional but recommended: fail here if the role cannot be assumed.
-			if _, err := assumedCfg.Credentials.Retrieve(context.Background()); err != nil {
-				return nil, fmt.Errorf("failed to assume role %q: %w", scType.AssumedRole, err)
-			}
-
-			s3Client = s3.NewFromConfig(assumedCfg, f...)
-		} else {
-			s3Client = s3.NewFromConfig(cfg, f...)
-		}
-
-		fs := S3FS{
-			s3client:  s3Client,
-			config:    &scType,
-			delimiter: delimiter,
-			maxKeys:   maxKeys,
-		}
-		return &fs, nil
-
-	/*
-		stsClient := sts.NewFromConfig(cfg)
-
-		// Assume the role in the other account.
-		provider := stscreds.NewAssumeRoleProvider(
-			stsClient,
-			roleARN,
-			func(o *stscreds.AssumeRoleOptions) {
-				o.RoleSessionName = "batch-cross-account-s3"
-			},
-		)
-
-		// Create a separate credential chain for the target role.
-		assumedCfg := cfg.Copy()
-		assumedCfg.Credentials = aws.NewCredentialsCache(provider)
-
-		// This client uses the assumed role, not job-runner-role directly.
-		return s3.NewFromConfig(assumedCfg), nil
-	*/
+		return NewS3Store(scType)
 	default:
-		return nil, errors.New(fmt.Sprintf("invalid File System System Type Configuration: %v", scType))
+		return nil, fmt.Errorf("invalid File System System Type Configuration: %v", scType)
 	}
 }
 
