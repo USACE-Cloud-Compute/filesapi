@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,10 +16,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	smithyendpoints "github.com/aws/smithy-go/endpoints"
 )
 
@@ -148,7 +153,87 @@ type S3FS struct {
 	config    *S3FSConfig
 	delimiter string
 	maxKeys   int32
-	//ignoreContinuationOnWalk bool //internal use only
+	logger    *slog.Logger
+}
+
+func NewS3Store(cfg S3FSConfig, opts ...Option) (*S3FS, error) {
+	var awsCfg aws.Config
+	var err error
+	maxKeys := DEFAULTMAXKEYS
+	if cfg.MaxKeys > 0 {
+		maxKeys = cfg.MaxKeys
+	}
+	delimiter := DEFAULTDELIMITER
+	if cfg.Delimiter != "" {
+		delimiter = cfg.Delimiter
+	}
+	loadOptions := []func(*config.LoadOptions) error{}
+	if cfg.AwsOptions != nil {
+		loadOptions = append(loadOptions, cfg.AwsOptions...)
+	}
+	loadOptions = append(loadOptions, config.WithRegion(cfg.S3Region))
+
+	switch cred := cfg.Credentials.(type) {
+	case S3FS_Static:
+		loadOptions = append(loadOptions, config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(cred.S3Id, cred.S3Key, ""),
+		))
+	case S3FS_Attached:
+		if cred.Profile != "" {
+			loadOptions = append(loadOptions, config.WithSharedConfigProfile(cred.Profile))
+		}
+	default:
+		return nil, errors.New("Invalid S3 Credentials")
+	}
+
+	awsCfg, err = config.LoadDefaultConfig(
+		context.Background(),
+		loadOptions...,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	f := []func(o *s3.Options){}
+	if cfg.AltEndpoint != "" {
+		endpointUrl := fmt.Sprintf("%s/%s", cfg.AltEndpoint, cfg.S3Bucket)
+		f = append(f, func(o *s3.Options) { o.EndpointResolverV2 = &StaticResolver{Url: endpointUrl} })
+	}
+
+	var s3Client *s3.Client
+	if cfg.AssumedRole != "" {
+		stsClient := sts.NewFromConfig(awsCfg)
+		provider := stscreds.NewAssumeRoleProvider(stsClient, cfg.AssumedRole, func(o *stscreds.AssumeRoleOptions) {
+			o.RoleSessionName = "batch-cross-account-s3"
+		})
+		assumedCfg := awsCfg.Copy()
+		assumedCfg.Credentials = aws.NewCredentialsCache(provider)
+
+		if _, err := assumedCfg.Credentials.Retrieve(context.Background()); err != nil {
+			return nil, fmt.Errorf("failed to assume role %q: %w", cfg.AssumedRole, err)
+		}
+
+		s3Client = s3.NewFromConfig(assumedCfg, f...)
+	} else {
+		s3Client = s3.NewFromConfig(awsCfg, f...)
+	}
+
+	options := internalOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if options.logger == nil {
+		options.logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+	}
+
+	fs := &S3FS{
+		s3client:  s3Client,
+		config:    &cfg,
+		delimiter: delimiter,
+		maxKeys:   maxKeys,
+		logger:    options.logger,
+	}
+	return fs, nil
 }
 
 func (s3fs *S3FS) GetClient() *s3.Client {
@@ -258,14 +343,24 @@ func (s3fs *S3FS) getAllUpToMax(input ListDirInput, params *s3.ListObjectsV2Inpu
 	objects := []types.Object{}
 	var objcount int32
 
-	//handle filter
-	if len(input.Filter) > 0 && string(input.Filter[0]) != "*" {
-		newPrefix := (*params.Prefix) + input.Filter
-		params.Prefix = &newPrefix
-		input.Filter = ""
-	} else {
-		input.Filter = input.Filter[1:]
+	if len(input.Filter) > 0 {
+		if string(input.Filter[0]) != "*" {
+			newPrefix := (*params.Prefix) + input.Filter
+			params.Prefix = &newPrefix
+			input.Filter = ""
+		} else {
+			input.Filter = input.Filter[1:]
+		}
 	}
+
+	//handle filter
+	// if len(input.Filter) > 0 && string(input.Filter[0]) != "*" {
+	// 	newPrefix := (*params.Prefix) + input.Filter
+	// 	params.Prefix = &newPrefix
+	// 	input.Filter = ""
+	// } else if {
+	// 	input.Filter = input.Filter[1:]
+	// }
 
 	for shouldContinue {
 		params.ContinuationToken = continuationToken
