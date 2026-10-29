@@ -98,6 +98,9 @@ type UploadConfig struct {
 
 	//optional caller provided context. context.Background is used if no context is provided
 	Context context.Context
+
+	ContentDisposition *string
+	ContentType        *string
 }
 
 type CompletedObjectUploadConfig struct {

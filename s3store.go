@@ -798,8 +798,10 @@ func (s3fs *S3FS) InitializeObjectUpload(u UploadConfig) (UploadResult, error) {
 	s3path := u.ObjectPath //@TODO incomoplete
 	s3path = strings.TrimPrefix(s3path, "/")
 	input := &s3.CreateMultipartUploadInput{
-		Bucket: &s3fs.config.S3Bucket,
-		Key:    &s3path,
+		Bucket:             &s3fs.config.S3Bucket,
+		Key:                &s3path,
+		ContentDisposition: u.ContentDisposition,
+		ContentType:        u.ContentType,
 	}
 
 	resp, err := s3fs.s3client.CreateMultipartUpload(u.Context, input)
