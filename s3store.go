@@ -525,9 +525,10 @@ func (s3fs *S3FS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 	if poi.Mutipart {
 		uploader := manager.NewUploader(s3fs.s3client)
 		s3output, err := uploader.Upload(poi.Context, &s3.PutObjectInput{
-			Bucket: &s3fs.config.S3Bucket,
-			Key:    &s3Path,
-			Body:   reader,
+			Bucket:             &s3fs.config.S3Bucket,
+			Key:                &s3Path,
+			Body:               reader,
+			ContentDisposition: poi.ContentDisposition,
 		})
 		if err != nil {
 			return nil, err
@@ -538,10 +539,11 @@ func (s3fs *S3FS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 		return output, err
 	} else {
 		input := &s3.PutObjectInput{
-			Bucket:        &s3fs.config.S3Bucket,
-			Body:          reader,
-			ContentLength: poi.Source.ContentLength,
-			Key:           &s3Path,
+			Bucket:             &s3fs.config.S3Bucket,
+			Body:               reader,
+			ContentLength:      poi.Source.ContentLength,
+			Key:                &s3Path,
+			ContentDisposition: poi.ContentDisposition,
 		}
 
 		//currently only supporting default equivalent of cls --sse

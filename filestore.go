@@ -152,7 +152,8 @@ type PutObjectInput struct {
 	Encryption EncryptionStrategy
 
 	//optional caller provided context. context.Background is used if no context is provided
-	Context context.Context
+	Context            context.Context
+	ContentDisposition *string
 }
 
 type Range struct {
