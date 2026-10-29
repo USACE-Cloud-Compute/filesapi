@@ -529,6 +529,7 @@ func (s3fs *S3FS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 			Key:                &s3Path,
 			Body:               reader,
 			ContentDisposition: poi.ContentDisposition,
+			ContentType:        poi.ContentType,
 		})
 		if err != nil {
 			return nil, err
@@ -544,6 +545,7 @@ func (s3fs *S3FS) PutObject(poi PutObjectInput) (*FileOperationOutput, error) {
 			ContentLength:      poi.Source.ContentLength,
 			Key:                &s3Path,
 			ContentDisposition: poi.ContentDisposition,
+			ContentType:        poi.ContentType,
 		}
 
 		//currently only supporting default equivalent of cls --sse

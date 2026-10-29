@@ -165,6 +165,7 @@ Defines where the data for an upload originates.
 | `Multipart` | `bool` | No | Whether to use multipart upload (S3). |
 | `Encryption` | `EncryptionStrategy` | No | `DEFAULT`, `AES`, or `VENDOR`. |
 | `ContentDispostion` | `*string` | No | An optional content disposition if supported by the file system.  Ignored otherwise. |
+| `ContentType` | `*string` | No | An optional content type if supported by the file system.  Ignored otherwise. |
 
 #### `ListDirInput`
 
