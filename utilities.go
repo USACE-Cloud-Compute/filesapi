@@ -53,7 +53,7 @@ func (r Retryer[T]) Send(sendFunction func() (T, error)) (T, error) {
 		}
 		b := rand.Float64() //@TODO should probably use crypto random.....
 		secondsToSleep := math.Min(b*math.Pow(r.R, float64(attempts)), r.MaxBackoff)
-		time.Sleep(time.Second * time.Duration(secondsToSleep))
+		time.Sleep(time.Duration(secondsToSleep * float64(time.Second)))
 		attempts++
 	}
 }
