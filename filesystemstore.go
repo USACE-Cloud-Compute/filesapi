@@ -74,16 +74,44 @@ func (b *BlockFS) verifyPath(p string) error {
 		return nil
 	}
 
+	// Normalize the path to handle trailing slashes and redundant separators
+	p = filepath.Clean(p)
+
+	// 1. Resolve the real, physical path of the base directory
 	base, err := filepath.Abs(filepath.Clean(b.Config.BaseDir))
 	if err != nil {
 		return fmt.Errorf("invalid base directory: %w", err)
 	}
-
-	target, err := filepath.Abs(filepath.Clean(p))
+	base, err = filepath.EvalSymlinks(base)
 	if err != nil {
-		return fmt.Errorf("invalid target path: %w", err)
+		return fmt.Errorf("invalid base directory: %w", err)
 	}
 
+	var target string
+	// 2. Try to resolve the real path of the target
+	target, err = filepath.EvalSymlinks(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// 3. If the file doesn't exist, resolve the parent directory instead
+			parent := filepath.Dir(p)
+			resolvedParent, err := filepath.EvalSymlinks(parent)
+			if err != nil {
+				// If the parent doesn't exist, we fallback to the absolute path
+				target, err = filepath.Abs(p)
+				if err != nil {
+					return fmt.Errorf("invalid target path: %w", err)
+				}
+			} else {
+				// Construct the target path using the resolved physical parent
+				target = filepath.Join(resolvedParent, filepath.Base(p))
+			}
+		} else {
+			// It's a real error (e.g., permission denied), so return it
+			return fmt.Errorf("failed to resolve symlinks for %q: %w", p, err)
+		}
+	}
+
+	// 4. Verify the resolved physical path is still within the base directory
 	rel, err := filepath.Rel(base, target)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("path traversal violation: %q is outside base directory %q", p, base)
