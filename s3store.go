@@ -497,10 +497,14 @@ func (s3fs *S3FS) GetObject(goi GetObjectInput) (io.ReadCloser, error) {
 		goi.Context = context.Background()
 	}
 	s3Path := strings.TrimPrefix(goi.Path.Path, "/")
+	var reqRange *string
+	if goi.Range != "" {
+		reqRange = &goi.Range
+	}
 	input := &s3.GetObjectInput{
 		Bucket: &s3fs.config.S3Bucket,
 		Key:    &s3Path,
-		Range:  &goi.Range,
+		Range:  reqRange,
 	}
 	output, err := s3fs.s3client.GetObject(goi.Context, input)
 	if err != nil {
