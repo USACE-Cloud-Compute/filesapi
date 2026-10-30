@@ -70,7 +70,10 @@ func (obj *S3AttributesFileInfo) Mode() os.FileMode {
 }
 
 func (obj *S3AttributesFileInfo) ModTime() time.Time {
-	return time.Now()
+	if obj.LastModified == nil {
+		return time.Time{}
+	}
+	return *obj.LastModified
 }
 
 // if the object has attributes, then it is a "file"
