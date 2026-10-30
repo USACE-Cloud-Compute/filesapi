@@ -265,10 +265,13 @@ func (s3fs *S3FS) GetObjectInfo(path PathConfig) (fs.FileInfo, error) {
 	}
 
 	resp, err := s3fs.s3client.GetObjectAttributes(path.Context, params)
-	if errors.As(err, &noSuchKey) {
-		err = &FileNotFoundError{path.Path}
+	if err != nil {
+		if errors.As(err, &noSuchKey) {
+			err = &FileNotFoundError{path.Path}
+		}
+		return nil, err
 	}
-	return &S3AttributesFileInfo{s3Path, resp}, err
+	return &S3AttributesFileInfo{s3Path, resp}, nil
 }
 
 func (s3fs *S3FS) ListDir(input ListDirInput) (*[]FileStoreResultObject, error) {
