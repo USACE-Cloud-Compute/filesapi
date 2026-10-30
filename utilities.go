@@ -26,8 +26,6 @@ const (
 	maxExpiration       int    = 86400 * 30 //30 days
 )
 
-var fileNotFoundError *FileNotFoundError
-
 type Retryer[T any] struct {
 
 	//Max retry attempts
@@ -176,9 +174,19 @@ type PresignInputOptions struct {
 // 	return bytes.Equal(signature, expectedSignature)
 // }
 
-func FileExists(fs FileStore, path string) bool {
+func FileExists(fs FileStore, path string) (bool, error) {
 	_, err := fs.GetObjectInfo(PathConfig{Path: path})
-	return !errors.As(err, &fileNotFoundError)
+
+	if err == nil {
+		return true, nil
+	}
+
+	var fileNotFoundError *FileNotFoundError
+	if errors.As(err, &fileNotFoundError) {
+		return false, nil
+	}
+
+	return false, err
 }
 
 func Ref[T any](t T) *T {
