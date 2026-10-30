@@ -3,10 +3,18 @@ package filesapi
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -621,6 +629,300 @@ func TestS3StoreListDirPagination(t *testing.T) {
 		})
 	})
 }
+
+type mockDeleteObjectsRequest struct {
+	Objects []struct {
+		Key string `xml:"Key"`
+	} `xml:"Object"`
+}
+
+func TestS3StoreDeleteObjectsPaginationAndBatching(t *testing.T) {
+	t.Run("MultiPagePrefixWalkAndExactBatching", func(t *testing.T) {
+		var mu sync.Mutex
+		objects := make(map[string]bool)
+		const totalKeys = 1005
+		for i := 0; i < totalKeys; i++ {
+			objects[fmt.Sprintf("dir/file-%04d.txt", i)] = true
+		}
+
+		var deleteBatchSizes []int
+		deletedKeysCount := make(map[string]int)
+		listCalls := 0
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			// GetObjectAttributes on prefix "dir" -> return 404 NoSuchKey so it's treated as a directory
+			if r.Method == http.MethodGet && r.URL.Query().Has("attributes") {
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>Not found</Message></Error>`))
+				return
+			}
+
+			// ListObjectsV2
+			if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
+				listCalls++
+				if listCalls > 20 {
+					t.Errorf("Infinite loop detected in ListObjectsV2")
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+
+				prefix := r.URL.Query().Get("prefix")
+				token := r.URL.Query().Get("continuation-token")
+				maxKeys := 500
+				if mk, err := strconv.Atoi(r.URL.Query().Get("max-keys")); err == nil && mk > 0 {
+					maxKeys = mk
+				}
+
+				// Deterministic sorted list of matching keys
+				var allKeys []string
+				for i := 0; i < totalKeys; i++ {
+					k := fmt.Sprintf("dir/file-%04d.txt", i)
+					if strings.HasPrefix(k, prefix) {
+						allKeys = append(allKeys, k)
+					}
+				}
+				sort.Strings(allKeys)
+
+				startIdx := 0
+				if token != "" {
+					startIdx, _ = strconv.Atoi(token)
+				}
+				endIdx := startIdx + maxKeys
+				isTruncated := false
+				nextToken := ""
+				if endIdx < len(allKeys) {
+					isTruncated = true
+					nextToken = strconv.Itoa(endIdx)
+				} else {
+					endIdx = len(allKeys)
+				}
+
+				var sb strings.Builder
+				sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+				sb.WriteString(fmt.Sprintf("<IsTruncated>%v</IsTruncated>", isTruncated))
+				if isTruncated {
+					sb.WriteString(fmt.Sprintf("<NextContinuationToken>%s</NextContinuationToken>", nextToken))
+				}
+				for _, k := range allKeys[startIdx:endIdx] {
+					sb.WriteString(fmt.Sprintf("<Contents><Key>%s</Key><Size>4</Size><LastModified>2026-01-01T00:00:00.000Z</LastModified></Contents>", k))
+				}
+				sb.WriteString(`</ListBucketResult>`)
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(sb.String()))
+				return
+			}
+
+			// DeleteObjects
+			if r.Method == http.MethodPost && r.URL.Query().Has("delete") {
+				body, _ := io.ReadAll(r.Body)
+				var req mockDeleteObjectsRequest
+				if err := xml.Unmarshal(body, &req); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				deleteBatchSizes = append(deleteBatchSizes, len(req.Objects))
+				var sb strings.Builder
+				sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?><DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+				for _, o := range req.Objects {
+					deletedKeysCount[o.Key]++
+					delete(objects, o.Key)
+					sb.WriteString(fmt.Sprintf("<Deleted><Key>%s</Key></Deleted>", o.Key))
+				}
+				sb.WriteString(`</DeleteResult>`)
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(sb.String()))
+				return
+			}
+
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		s3fs, err := NewS3Store(S3FSConfig{
+			S3Region:    "us-east-1",
+			S3Bucket:    "test-bucket",
+			AltEndpoint: srv.URL,
+			MaxKeys:     500, // Force multi-page ListObjectsV2 (3 pages for 1005 keys)
+			Credentials: S3FS_Static{S3Id: "test", S3Key: "test"},
+		})
+		if err != nil {
+			t.Fatalf("NewS3Store failed: %v", err)
+		}
+
+		errs := s3fs.DeleteObjects(DeleteObjectInput{
+			Paths: PathConfig{Paths: []string{"dir"}},
+		})
+		if len(errs) != 0 {
+			t.Fatalf("Expected no errors, got: %v", errs)
+		}
+
+		if len(deleteBatchSizes) != 2 || deleteBatchSizes[0] != 1000 || deleteBatchSizes[1] != 5 {
+			t.Fatalf("Expected batch sizes [1000, 5], got %v", deleteBatchSizes)
+		}
+
+		if len(deletedKeysCount) != totalKeys {
+			t.Fatalf("Expected %d unique keys deleted, got %d", totalKeys, len(deletedKeysCount))
+		}
+		for k, count := range deletedKeysCount {
+			if count != 1 {
+				t.Fatalf("Key %s was deleted %d times, expected 1", k, count)
+			}
+		}
+	})
+
+	t.Run("MultipleFilesBatchedWithoutDuplicationAndErrorsPropagated", func(t *testing.T) {
+		var mu sync.Mutex
+		var deleteBatchSizes []int
+		deletedKeysCount := make(map[string]int)
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			// GetObjectAttributes -> return valid file attributes so IsDir() == false
+			if r.Method == http.MethodGet && r.URL.Query().Has("attributes") {
+				w.Header().Set("Last-Modified", "Thu, 01 Jan 2026 00:00:00 GMT")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><GetObjectAttributesOutput xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><ETag>"12345"</ETag><ObjectSize>10</ObjectSize></GetObjectAttributesOutput>`))
+				return
+			}
+
+			// DeleteObjects
+			if r.Method == http.MethodPost && r.URL.Query().Has("delete") {
+				body, _ := io.ReadAll(r.Body)
+				var req mockDeleteObjectsRequest
+				if err := xml.Unmarshal(body, &req); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				deleteBatchSizes = append(deleteBatchSizes, len(req.Objects))
+				var sb strings.Builder
+				sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?><DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+				for _, o := range req.Objects {
+					deletedKeysCount[o.Key]++
+					if o.Key == "fail.txt" {
+						sb.WriteString(`<Error><Key>fail.txt</Key><Code>AccessDenied</Code><Message>Access Denied</Message></Error>`)
+					} else {
+						sb.WriteString(fmt.Sprintf("<Deleted><Key>%s</Key></Deleted>", o.Key))
+					}
+				}
+				sb.WriteString(`</DeleteResult>`)
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(sb.String()))
+				return
+			}
+
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		s3fs, err := NewS3Store(S3FSConfig{
+			S3Region:    "us-east-1",
+			S3Bucket:    "test-bucket",
+			AltEndpoint: srv.URL,
+			Credentials: S3FS_Static{S3Id: "test", S3Key: "test"},
+		})
+		if err != nil {
+			t.Fatalf("NewS3Store failed: %v", err)
+		}
+
+		errs := s3fs.DeleteObjects(DeleteObjectInput{
+			Paths: PathConfig{Paths: []string{"file1.txt", "file2.txt", "fail.txt"}},
+		})
+
+		// Should batch all 3 files into a single DeleteObjects request without re-deleting earlier files
+		if len(deleteBatchSizes) != 1 || deleteBatchSizes[0] != 3 {
+			t.Fatalf("Expected single batch of 3 objects, got batches: %v", deleteBatchSizes)
+		}
+		for _, k := range []string{"file1.txt", "file2.txt", "fail.txt"} {
+			if deletedKeysCount[k] != 1 {
+				t.Fatalf("Expected %s to be submitted once, got %d", k, deletedKeysCount[k])
+			}
+		}
+
+		// Should surface the batch delete error for fail.txt (not shadow errs)
+		if len(errs) != 1 || !strings.Contains(errs[0].Error(), "fail.txt: AccessDenied") {
+			t.Fatalf("Expected 1 AccessDenied error for fail.txt, got: %v", errs)
+		}
+	})
+
+	t.Run("ExactBatchMultipleAndEmptyDirectoryDoNotReturnNothingToDelete", func(t *testing.T) {
+		var mu sync.Mutex
+		var deleteBatchSizes []int
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			if r.Method == http.MethodGet && r.URL.Query().Has("attributes") {
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>Not found</Message></Error>`))
+				return
+			}
+
+			if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
+				prefix := r.URL.Query().Get("prefix")
+				var sb strings.Builder
+				sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated>`)
+				if prefix == "exact1000" {
+					for i := 0; i < 1000; i++ {
+						sb.WriteString(fmt.Sprintf("<Contents><Key>exact1000/file-%04d.txt</Key><Size>4</Size><LastModified>2026-01-01T00:00:00.000Z</LastModified></Contents>", i))
+					}
+				}
+				sb.WriteString(`</ListBucketResult>`)
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(sb.String()))
+				return
+			}
+
+			if r.Method == http.MethodPost && r.URL.Query().Has("delete") {
+				body, _ := io.ReadAll(r.Body)
+				var req mockDeleteObjectsRequest
+				if err := xml.Unmarshal(body, &req); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				deleteBatchSizes = append(deleteBatchSizes, len(req.Objects))
+				var sb strings.Builder
+				sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?><DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+				for _, o := range req.Objects {
+					sb.WriteString(fmt.Sprintf("<Deleted><Key>%s</Key></Deleted>", o.Key))
+				}
+				sb.WriteString(`</DeleteResult>`)
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(sb.String()))
+				return
+			}
+
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		s3fs, err := NewS3Store(S3FSConfig{
+			S3Region:    "us-east-1",
+			S3Bucket:    "test-bucket",
+			AltEndpoint: srv.URL,
+			Credentials: S3FS_Static{S3Id: "test", S3Key: "test"},
+		})
+		if err != nil {
+			t.Fatalf("NewS3Store failed: %v", err)
+		}
+
+		errs := s3fs.DeleteObjects(DeleteObjectInput{
+			Paths: PathConfig{Paths: []string{"exact1000", "emptydir"}},
+		})
+		if len(errs) != 0 {
+			t.Fatalf("Expected no errors, got: %v", errs)
+		}
+		if len(deleteBatchSizes) != 1 || deleteBatchSizes[0] != 1000 {
+			t.Fatalf("Expected exactly 1 batch of 1000 deletes, got: %v", deleteBatchSizes)
+		}
+	})
+}
+
 
 func TestS3StoreWalkContext(t *testing.T) {
 	fs, teardown := setupS3Store(t)
