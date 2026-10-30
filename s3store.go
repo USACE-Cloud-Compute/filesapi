@@ -592,7 +592,7 @@ func (s3fs *S3FS) DeleteObjects(doi DeleteObjectInput) []error {
 
 }
 
-func (s3fs *S3FS) deleteListImpl(ctx context.Context, input *s3.DeleteObjectsInput, pf ProgressFunction) []error {
+func (s3fs *S3FS) deleteListImpl_DEPRICATED(ctx context.Context, input *s3.DeleteObjectsInput, pf ProgressFunction) []error {
 	errs := []error{}
 	maxDelBufferSize := 1000
 	delBuffer := []types.ObjectIdentifier{}
@@ -637,6 +637,66 @@ func (s3fs *S3FS) deleteListImpl(ctx context.Context, input *s3.DeleteObjectsInp
 			}
 		}
 	}
+	return errs
+}
+
+func (s3fs *S3FS) deleteListImpl(ctx context.Context, input *s3.DeleteObjectsInput, pf ProgressFunction) []error {
+	errs := []error{}
+	maxDelBufferSize := 1000
+	delBuffer := make([]types.ObjectIdentifier, 0, maxDelBufferSize)
+
+	flush := func() {
+		if len(delBuffer) == 0 {
+			return
+		}
+		if batchErrs := s3fs.flushDeletes(ctx, delBuffer); len(batchErrs) > 0 {
+			log.Println("Error in batch delete operation")
+			for _, err := range batchErrs {
+				log.Println(err)
+			}
+			errs = append(errs, batchErrs...)
+		}
+		delBuffer = delBuffer[:0]
+	}
+
+	for _, obj := range input.Delete.Objects {
+		if obj.Key == nil {
+			continue
+		}
+		key := *obj.Key
+		info, err1 := s3fs.GetObjectInfo(PathConfig{Path: key, Context: ctx})
+		if err1 != nil {
+			//if we get a filenotfound error, then attempt to traverse it as a path
+			//otherwise quit
+			var fnfErr *FileNotFoundError
+			if !errors.As(err1, &fnfErr) {
+				log.Printf("Error getting delete object info for %s: %s\n", key, err1)
+				return append(errs, err1)
+			}
+		}
+		if info != nil && info.IsDir() {
+			walkErr := s3fs.walkImpl(WalkInput{Path: PathConfig{Path: key}, Progress: pf, Context: ctx}, func(path string, file os.FileInfo) error {
+				k := file.Name()
+				delBuffer = append(delBuffer, types.ObjectIdentifier{Key: &k})
+				if len(delBuffer) >= maxDelBufferSize {
+					flush()
+				}
+				return nil
+			}, false)
+			if walkErr != nil {
+				errs = append(errs, walkErr)
+			}
+		} else {
+			delBuffer = append(delBuffer, types.ObjectIdentifier{Key: &key})
+			if len(delBuffer) >= maxDelBufferSize {
+				flush()
+			}
+		}
+	}
+
+	//flush any remaining deletes
+	flush()
+
 	return errs
 }
 
@@ -870,7 +930,7 @@ func (s3fs *S3FS) Walk(input WalkInput, vistorFunction FileVisitFunction) error 
 	return s3fs.walkImpl(input, vistorFunction, false) //ignoreContinuationOnWalk set to false
 }
 
-func (s3fs *S3FS) walkImpl(input WalkInput, vistorFunction FileVisitFunction, ignoreContinuationOnWalk bool) error {
+func (s3fs *S3FS) walkImpl_DEPRICATED(input WalkInput, vistorFunction FileVisitFunction, ignoreContinuationOnWalk bool) error {
 	if input.Context == nil {
 		input.Context = context.Background()
 	}
@@ -913,6 +973,48 @@ func (s3fs *S3FS) walkImpl(input WalkInput, vistorFunction FileVisitFunction, ig
 		} else {
 			truncatedListing = *resp.IsTruncated
 		}
+		count++
+	}
+	return nil
+}
+
+func (s3fs *S3FS) walkImpl(input WalkInput, vistorFunction FileVisitFunction, ignoreContinuationOnWalk bool) error {
+	if input.Context == nil {
+		input.Context = context.Background()
+	}
+	s3Path := strings.TrimPrefix(input.Path.Path, "/")
+	s3delim := ""
+	query := &s3.ListObjectsV2Input{
+		Bucket:    &s3fs.config.S3Bucket,
+		Prefix:    &s3Path,
+		Delimiter: &s3delim,
+		MaxKeys:   &s3fs.maxKeys,
+	}
+
+	truncatedListing := true
+	count := 0
+	for truncatedListing {
+		resp, err := s3fs.s3client.ListObjectsV2(input.Context, query)
+		if err != nil {
+			return err
+		}
+		for _, content := range resp.Contents {
+			obj := content
+			fileInfo := &S3FileInfo{&obj}
+			err = vistorFunction("/"+*obj.Key, fileInfo)
+			if err != nil {
+				return err
+			}
+			if input.Progress != nil {
+				input.Progress(ProgressData{
+					Index: count,
+					Max:   -1,
+					Value: fileInfo,
+				})
+			}
+		}
+		query.ContinuationToken = resp.NextContinuationToken
+		truncatedListing = resp.IsTruncated != nil && *resp.IsTruncated
 		count++
 	}
 	return nil
