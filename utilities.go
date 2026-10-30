@@ -48,7 +48,7 @@ func (r Retryer[T]) Send(sendFunction func() (T, error)) (T, error) {
 	attempts := 0
 	for {
 		t, err := sendFunction()
-		if err == nil || attempts > r.MaxAttempts {
+		if err == nil || attempts >= r.MaxAttempts {
 			return t, err
 		}
 		b := rand.Float64() //@TODO should probably use crypto random.....
