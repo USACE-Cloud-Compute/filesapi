@@ -1,7 +1,6 @@
 package filesapi
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -121,81 +120,61 @@ type PresignInputOptions struct {
 // method returns a new uri with the signature included.
 // Signing parameter names are borrowed from AWS and use their spec:
 // https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
-func PresignObject(options PresignInputOptions) (string, error) {
-	if options.Expiration > maxExpiration {
-		return "", errors.New("Expiration time too long")
-	}
-	uri, err := url.Parse(options.Uri)
-	if err != nil {
-		return "", err
-	}
-	qp := uri.Query()
-	qp.Add(timeQueryName, time.Now().UTC().Format(timeFormat))
-	qp.Add(expirationQueryName, strconv.Itoa(options.Expiration))
-	qp.Add(credentialQueryName, b64.StdEncoding.EncodeToString([]byte(options.Credential)))
-	uri.RawQuery = qp.Encode()
-	signature, err := sign([]byte(uri.String()), options.SigningKey)
-	sEnc := b64.StdEncoding.EncodeToString(signature)
-	sUrl := url.QueryEscape(sEnc)
-	qp.Add(signatureQueryName, sUrl)
-	uri.RawQuery = qp.Encode()
-	return uri.String(), nil
-}
+// func PresignObject(options PresignInputOptions) (string, error) {
+// 	if options.Expiration > maxExpiration {
+// 		return "", errors.New("Expiration time too long")
+// 	}
+// 	uri, err := url.Parse(options.Uri)
+// 	if err != nil {
+// 		return "", err
+// 	}
+// 	qp := uri.Query()
+// 	qp.Add(timeQueryName, time.Now().UTC().Format(timeFormat))
+// 	qp.Add(expirationQueryName, strconv.Itoa(options.Expiration))
+// 	qp.Add(credentialQueryName, b64.StdEncoding.EncodeToString([]byte(options.Credential)))
+// 	uri.RawQuery = qp.Encode()
+// 	signature, err := sign([]byte(uri.String()), options.SigningKey)
+// 	if err != nil {
+// 		return "", err
+// 	}
+// 	sEnc := b64.StdEncoding.EncodeToString(signature)
+// 	sUrl := url.QueryEscape(sEnc)
+// 	qp.Add(signatureQueryName, sUrl)
+// 	uri.RawQuery = qp.Encode()
+// 	return uri.String(), nil
+// }
 
-func sign(data []byte, signingKey []byte) ([]byte, error) {
-	mac := hmac.New(sha256.New, signingKey)
-	_, err := mac.Write(data)
-	if err != nil {
-		return nil, err
-	}
-	return mac.Sum(nil), nil
-}
+// // verify a signed object.  Returns a boolean.  True if verified, false on any error
+// // or validation failure
+// func VerifySignedObject(options PresignInputOptions) bool {
+// 	uri, err := url.Parse(options.Uri)
+// 	if err != nil {
+// 		return false
+// 	}
+// 	sigok := verifySignature(uri, options.SigningKey)
+// 	timeok := verifyExpiration(uri.Query())
+// 	return sigok && timeok
+// }
 
-// verify a signed object.  Returns a boolean.  True if verified, false on any error
-// or validation failure
-func VerifySignedObject(options PresignInputOptions) bool {
-	uri, err := url.Parse(options.Uri)
-	if err != nil {
-		return false
-	}
-	sigok := verifySignature(uri, options.SigningKey)
-	timeok := verifyExpiration(uri.Query())
-	return sigok && timeok
-}
-
-func verifySignature(uri *url.URL, key []byte) bool {
-	qp := uri.Query()
-	urlSignature := qp.Get(signatureQueryName)
-	b64signature, err := url.QueryUnescape(urlSignature)
-	if err != nil {
-		return false
-	}
-	signature, err := b64.StdEncoding.DecodeString(b64signature)
-	if err != nil {
-		return false
-	}
-	qp.Del(signatureQueryName)
-	uri.RawQuery = qp.Encode()
-	expectedSignature, err := sign([]byte(uri.String()), key)
-	if err != nil {
-		return false
-	}
-	return bytes.Equal(signature, expectedSignature)
-}
-
-func verifyExpiration(qp url.Values) bool {
-	t, err := time.Parse(timeFormat, qp.Get(timeQueryName))
-	if err != nil {
-		return false
-	}
-	d, err := strconv.Atoi(qp.Get(expirationQueryName))
-	if err != nil {
-		return false
-	}
-	t = t.Add(time.Second * time.Duration(d))
-	return t.After(time.Now().UTC())
-
-}
+// func verifySignature(uri *url.URL, key []byte) bool {
+// 	qp := uri.Query()
+// 	urlSignature := qp.Get(signatureQueryName)
+// 	b64signature, err := url.QueryUnescape(urlSignature)
+// 	if err != nil {
+// 		return false
+// 	}
+// 	signature, err := b64.StdEncoding.DecodeString(b64signature)
+// 	if err != nil {
+// 		return false
+// 	}
+// 	qp.Del(signatureQueryName)
+// 	uri.RawQuery = qp.Encode()
+// 	expectedSignature, err := sign([]byte(uri.String()), key)
+// 	if err != nil {
+// 		return false
+// 	}
+// 	return bytes.Equal(signature, expectedSignature)
+// }
 
 func FileExists(fs FileStore, path string) bool {
 	_, err := fs.GetObjectInfo(PathConfig{Path: path})
@@ -229,7 +208,7 @@ func CopyWithContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, 
 //-------- Fixing Cryptographic & Presigning issues below ---------
 
 // PresignObjectV2 presigns a URI with single query encoding and deterministic parameter ordering.
-func PresignObjectV2(options PresignInputOptions) (string, error) {
+func PresignObject(options PresignInputOptions) (string, error) {
 	if options.Expiration > maxExpiration {
 		return "", errors.New("Expiration time too long")
 	}
@@ -256,7 +235,7 @@ func PresignObjectV2(options PresignInputOptions) (string, error) {
 
 // VerifySignedObjectV2 verifies a signed URI using constant-time comparison (hmac.Equal)
 // and handles query parameters normalized without double unescaping.
-func VerifySignedObjectV2(options PresignInputOptions) bool {
+func VerifySignedObject(options PresignInputOptions) bool {
 	uri, err := url.Parse(options.Uri)
 	if err != nil {
 		return false
@@ -284,4 +263,26 @@ func verifySignatureV2(uri *url.URL, key []byte) bool {
 		return false
 	}
 	return hmac.Equal(signature, expectedSignature)
+}
+
+func verifyExpiration(qp url.Values) bool {
+	t, err := time.Parse(timeFormat, qp.Get(timeQueryName))
+	if err != nil {
+		return false
+	}
+	d, err := strconv.Atoi(qp.Get(expirationQueryName))
+	if err != nil {
+		return false
+	}
+	t = t.Add(time.Second * time.Duration(d))
+	return t.After(time.Now().UTC())
+}
+
+func sign(data []byte, signingKey []byte) ([]byte, error) {
+	mac := hmac.New(sha256.New, signingKey)
+	_, err := mac.Write(data)
+	if err != nil {
+		return nil, err
+	}
+	return mac.Sum(nil), nil
 }

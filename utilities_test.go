@@ -22,12 +22,25 @@ func TestSignUrl(t *testing.T) {
 }
 
 func TestValidateUrl(t *testing.T) {
-	uri := "https://test.com/path1/path2?X-Amx-Date=20231102T212114Z&X-Amx-Expiration=60&X-Amx-Signature=RT%252BRzKYhkc%252Faw40j8nuGkwTaZq4kV7APr%252BhY1wzOtQ4%253D&param1=1234&param2=abcd"
+	expiration := 60
+	
 	options := PresignInputOptions{
-		Uri:        uri,
+		Uri:        "https://test.com/path1/path2?param1=1234&param2=abcd",
+		SigningKey: testKey,
+		Expiration: expiration,
+		Credential: "test-credential",
+	}
+	signedurl, err := PresignObject(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	verifyOptions := PresignInputOptions{
+		Uri:        signedurl,
 		SigningKey: testKey,
 	}
-	if VerifySignedObject(options) {
+
+	if VerifySignedObject(verifyOptions) {
 		fmt.Println("VALID!")
 	} else {
 		t.Fatal("NOT VALID")
