@@ -109,9 +109,6 @@ func (obj *S3FileInfo) Mode() os.FileMode {
 }
 
 func (obj *S3FileInfo) ModTime() time.Time {
-	if obj.s3.LastModified == nil {
-		return time.Time{}
-	}
 	return *obj.s3.LastModified
 }
 
