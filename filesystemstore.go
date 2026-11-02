@@ -533,6 +533,7 @@ func (b *BlockFS) Walk(input WalkInput, visitorFunction FileVisitFunction) error
 	if err := b.verifyPath(input.Path.Path); err != nil {
 		return err
 	}
+	count := 0
 	if input.FsUseWalk {
 		err := filepath.Walk(input.Path.Path,
 			func(path string, fileinfo os.FileInfo, err error) error {
@@ -546,6 +547,13 @@ func (b *BlockFS) Walk(input WalkInput, visitorFunction FileVisitFunction) error
 					default:
 					}
 				}
+				if input.Progress != nil {
+					input.Progress(ProgressData{
+						Index: count,
+						Max:   -1,
+						Value: fileinfo,
+					})
+				}
 
 				err = visitorFunction(path, fileinfo)
 				return err
@@ -557,16 +565,33 @@ func (b *BlockFS) Walk(input WalkInput, visitorFunction FileVisitFunction) error
 				if err != nil {
 					return err
 				}
+				if input.Context != nil {
+					select {
+					case <-input.Context.Done():
+						return input.Context.Err()
+					default:
+					}
+				}
 				//pass a full FileInfo to the visitor fucntion
+				var fsinfo fs.FileInfo
 				if input.FsFullInfo {
-					info, err := direntry.Info()
+					fsinfo, err = direntry.Info()
 					if err != nil {
 						return err
 					}
-					err = visitorFunction(path, info)
 				} else {
-					err = visitorFunction(path, &DirEntryFileInfo{DirEntry: direntry})
+					fsinfo = &DirEntryFileInfo{DirEntry: direntry}
 				}
+
+				if input.Progress != nil {
+					input.Progress(ProgressData{
+						Index: count,
+						Max:   -1,
+						Value: fsinfo,
+					})
+				}
+				err = visitorFunction(path, fsinfo)
+
 				return err
 			})
 		return err
